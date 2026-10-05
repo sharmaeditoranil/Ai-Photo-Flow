@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 160" width="100%" height="100%">
+  <defs>
+    <!-- Background Squircle Gradient -->
+    <linearGradient id="navSquircleBg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e2430" />
+      <stop offset="50%" stop-color="#11141a" />
+      <stop offset="100%" stop-color="#080a0d" />
+    </linearGradient>
+
+    <!-- Outer Rim Gradient -->
+    <linearGradient id="navRimGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="50%" stop-color="#1e293b" />
+      <stop offset="100%" stop-color="#f59e0b" />
+    </linearGradient>
+
+    <!-- Lens Glass Reflection Gradient -->
+    <linearGradient id="navGlassReflect" x1="20%" y1="0%" x2="80%" y2="100%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.35" />
+      <stop offset="35%" stop-color="#38bdf8" stop-opacity="0.15" />
+      <stop offset="70%" stop-color="#000000" stop-opacity="0.6" />
+      <stop offset="100%" stop-color="#f59e0b" stop-opacity="0.2" />
+    </linearGradient>
+
+    <!-- Cyan AI Glow -->
+    <linearGradient id="navAiCyan" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67e8f9" />
+      <stop offset="100%" stop-color="#0284c7" />
+    </linearGradient>
+
+    <!-- Warm Amber Flow -->
+    <linearGradient id="navWarmAmber" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#fde047" />
+      <stop offset="50%" stop-color="#f59e0b" />
+      <stop offset="100%" stop-color="#d97706" />
+    </linearGradient>
+
+    <!-- Text Flow Gradient -->
+    <linearGradient id="textFlowGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#f59e0b" />
+    </linearGradient>
+
+    <!-- Glow Filter -->
+    <filter id="navCoreGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="3" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Group for Logo Icon (Scale to 120x120 placed at x=20, y=20) -->
+  <g transform="translate(20, 20) scale(0.234375)">
+    <!-- Dark Rounded Container (Squircle) -->
+    <rect x="16" y="16" width="480" height="480" rx="108" fill="url(#navSquircleBg)" stroke="rgba(255, 255, 255, 0.12)" stroke-width="3" />
+
+    <!-- Outer Metallic Lens Ring -->
+    <circle cx="256" cy="256" r="192" fill="none" stroke="url(#navRimGrad)" stroke-width="4" stroke-opacity="0.8" />
+    <circle cx="256" cy="256" r="182" fill="#0d1117" stroke="rgba(255,255,255,0.06)" stroke-width="2" />
+
+    <!-- Lens Element Shading -->
+    <circle cx="256" cy="256" r="172" fill="url(#navGlassReflect)" />
+
+    <!-- Aperture Blades -->
+    <g stroke="rgba(255,255,255,0.12)" stroke-width="1.5">
+      <path d="M 256 100 A 156 156 0 0 1 390 190 L 320 230 A 90 90 0 0 0 256 170 Z" fill="url(#navAiCyan)" opacity="0.85" />
+      <path d="M 390 190 A 156 156 0 0 1 405 320 L 330 290 A 90 90 0 0 0 320 230 Z" fill="#38bdf8" opacity="0.75" />
+      <path d="M 405 320 A 156 156 0 0 1 310 405 L 280 330 A 90 90 0 0 0 330 290 Z" fill="url(#navWarmAmber)" opacity="0.9" />
+      <path d="M 310 405 A 156 156 0 0 1 180 395 L 210 325 A 90 90 0 0 0 280 330 Z" fill="#f59e0b" opacity="0.8" />
+      <path d="M 180 395 A 156 156 0 0 1 110 295 L 185 265 A 90 90 0 0 0 210 325 Z" fill="#0ea5e9" opacity="0.7" />
+      <path d="M 110 295 A 156 156 0 0 1 145 165 L 215 215 A 90 90 0 0 0 185 265 Z" fill="#38bdf8" opacity="0.8" />
+    </g>
+
+    <!-- Aperture Inner Ring -->
+    <circle cx="256" cy="256" r="68" fill="#090d14" stroke="rgba(255,255,255,0.2)" stroke-width="2" />
+
+    <!-- Center AI Sparkle -->
+    <g filter="url(#navCoreGlow)">
+      <path d="M 256 210 Q 256 256 210 256 Q 256 256 256 302 Q 256 256 302 256 Q 256 256 256 210 Z" fill="#ffffff" />
+      <path d="M 305 200 Q 305 218 287 218 Q 305 218 305 236 Q 305 218 323 218 Q 305 218 305 200 Z" fill="#67e8f9" />
+      <path d="M 205 295 Q 205 310 190 310 Q 205 310 205 325 Q 205 310 220 310 Q 205 310 205 295 Z" fill="#fde047" />
+    </g>
+
+    <!-- Curved Reflection Arc -->
+    <path d="M 140 180 A 150 150 0 0 1 330 135" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" opacity="0.45" />
+  </g>
+
+  <!-- Brand Typography -->
+  <text x="165" y="92" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="54" font-weight="800" fill="#ffffff" letter-spacing="-1.5">
+    Ai <tspan fill="url(#textFlowGrad)">PhotoFlow</tspan>
+  </text>
+  
+  <!-- Subtitle Tagline -->
+  <text x="168" y="125" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif" font-size="16" font-weight="600" fill="#94a3b8" letter-spacing="2.5">
+    AI WEDDING CULLING &amp; BATCH EDITING
+  </text>
+</svg>

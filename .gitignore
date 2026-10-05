@@ -1,0 +1,47 @@
+# Dependencies
+node_modules/
+venv/
+.venv/
+env/
+
+# Build outputs & Installers
+dist/
+dist-backend/
+dist-dmg/
+build/photoflow-backend/
+*.spec
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+
+# Frontend builds
+frontend/dist/
+frontend/node_modules/
+
+# OS and IDE files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.vscode/
+.idea/
+
+# Local cache / SQLite database
+*.db
+*.db-wal
+*.db-shm
+.photoflow/
+.photoflow_cache/
+cache/
+
+# Local media / logs
+*.log
+sample_wedding_photos/
+sample_wedding_export/

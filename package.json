@@ -1,0 +1,90 @@
+{
+  "name": "ai-photoflow",
+  "productName": "Ai PhotoFlow",
+  "version": "1.0.0",
+  "description": "AI-Powered Wedding Photography Culling and Batch Editing Desktop Application",
+  "main": "electron/main.cjs",
+  "author": "Ai PhotoFlow Team",
+  "scripts": {
+    "start:backend": "PYTHONPATH=. ./venv/bin/python3 -m uvicorn backend.main:app --host 127.0.0.1 --port 8000",
+    "start:frontend": "npm --prefix frontend run dev",
+    "dev": "concurrently -n \"BACKEND,FRONTEND\" -c \"cyan,magenta\" \"npm run start:backend\" \"npm run start:frontend\"",
+    "start:desktop": "concurrently -k -n \"BACKEND,FRONTEND,ELECTRON\" -c \"cyan,magenta,yellow\" \"npm run start:backend\" \"npm run start:frontend\" \"wait-on http://localhost:5173 && electron .\"",
+    "build:frontend": "npm --prefix frontend run build",
+    "build:backend": "./venv/bin/pyinstaller --noconfirm --onedir --name photoflow-backend --distpath dist-backend --add-data \"./venv/lib/python3.9/site-packages/cv2/data/haarcascade_frontalface_default.xml:cv2/data\" --add-data \"./venv/lib/python3.9/site-packages/cv2/data/haarcascade_eye.xml:cv2/data\" --add-data \"./venv/lib/python3.9/site-packages/cv2/data/haarcascade_smile.xml:cv2/data\" backend_entry.py",
+    "build:dmg": "npm run build:frontend && npm run build:backend && electron-builder --mac",
+    "build:win": "npm run build:frontend && electron-builder --win nsis --x64"
+  },
+  "build": {
+    "appId": "com.aiphotoflow.app",
+    "productName": "Ai PhotoFlow",
+    "directories": {
+      "output": "dist-dmg"
+    },
+    "files": [
+      "electron/**/*",
+      "frontend/dist/**/*",
+      "build/icon.png",
+      "build/icon.ico",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "dist-backend/photoflow-backend",
+        "to": "photoflow-backend"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Ai PhotoFlow"
+    },
+    "mac": {
+      "category": "public.app-category.photography",
+      "target": [
+        "dmg"
+      ],
+      "icon": "build/icon.png",
+      "identity": null
+    },
+    "dmg": {
+      "title": "Ai PhotoFlow Installer",
+      "window": {
+        "width": 540,
+        "height": 380
+      },
+      "contents": [
+        {
+          "x": 140,
+          "y": 180
+        },
+        {
+          "x": 400,
+          "y": 180,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ]
+    }
+  },
+  "devDependencies": {
+    "concurrently": "^10.0.5",
+    "cross-env": "^10.1.0",
+    "electron": "^44.5.1",
+    "electron-builder": "^26.7.0",
+    "wait-on": "^9.5.1"
+  }
+}
