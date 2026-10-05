@@ -1,0 +1,933 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ai PhotoFlow — Function & Feature Documentation Guide</title>
+  <link rel="icon" type="image/png" href="assets/favicon-32x32.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-primary: #0a0c10;
+      --bg-secondary: #12161f;
+      --bg-surface: #181d28;
+      --bg-surface-hover: #202736;
+      --border-color: rgba(255, 255, 255, 0.08);
+      --border-accent: rgba(99, 102, 241, 0.3);
+      --text-primary: #f1f5f9;
+      --text-secondary: #94a3b8;
+      --text-muted: #64748b;
+      --accent-indigo: #6366f1;
+      --accent-violet: #8b5cf6;
+      --accent-emerald: #10b981;
+      --accent-amber: #f59e0b;
+      --accent-rose: #f43f5e;
+      --accent-cyan: #06b6d4;
+      --sidebar-width: 290px;
+      --radius-sm: 8px;
+      --radius-md: 12px;
+      --radius-lg: 18px;
+      --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      --font-mono: 'JetBrains Mono', monospace;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-primary);
+      color: var(--text-primary);
+      font-family: var(--font-sans);
+      line-height: 1.65;
+      font-size: 15px;
+      overflow-x: hidden;
+    }
+
+    /* Layout */
+    .docs-wrapper {
+      display: flex;
+      min-height: 100vh;
+    }
+
+    /* Sidebar */
+    .docs-sidebar {
+      width: var(--sidebar-width);
+      background: var(--bg-secondary);
+      border-right: 1px solid var(--border-color);
+      position: fixed;
+      top: 0;
+      bottom: 0;
+      left: 0;
+      overflow-y: auto;
+      padding: 24px 20px;
+      display: flex;
+      flex-direction: column;
+      z-index: 100;
+    }
+
+    .brand-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 24px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    .brand-logo {
+      width: 38px;
+      height: 38px;
+      border-radius: var(--radius-sm);
+      object-fit: contain;
+    }
+
+    .brand-title {
+      font-size: 17px;
+      font-weight: 700;
+      background: linear-gradient(135deg, #fff 30%, #94a3b8 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: -0.3px;
+    }
+
+    .brand-badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 20px;
+      background: rgba(99, 102, 241, 0.15);
+      color: var(--accent-indigo);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .search-box {
+      margin-bottom: 20px;
+      position: relative;
+    }
+
+    .search-input {
+      width: 100%;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      padding: 10px 12px 10px 34px;
+      color: var(--text-primary);
+      font-size: 13px;
+      outline: none;
+      transition: all 0.2s ease;
+      font-family: inherit;
+    }
+
+    .search-input:focus {
+      border-color: var(--accent-indigo);
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.15);
+    }
+
+    .search-icon {
+      position: absolute;
+      left: 11px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--text-muted);
+      font-size: 14px;
+      pointer-events: none;
+    }
+
+    .nav-group-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      margin: 16px 0 8px 6px;
+    }
+
+    .nav-list {
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+    }
+
+    .nav-item a {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 12px;
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 13.5px;
+      font-weight: 500;
+      border-radius: var(--radius-sm);
+      transition: all 0.2s;
+    }
+
+    .nav-item a:hover, .nav-item a.active {
+      background: var(--bg-surface-hover);
+      color: var(--text-primary);
+    }
+
+    .nav-item a.active {
+      background: rgba(99, 102, 241, 0.12);
+      color: #818cf8;
+      font-weight: 600;
+      border-left: 3px solid var(--accent-indigo);
+    }
+
+    .nav-item a span.icon {
+      font-size: 15px;
+      opacity: 0.8;
+    }
+
+    /* Main Content */
+    .docs-main {
+      margin-left: var(--sidebar-width);
+      flex: 1;
+      max-width: 1050px;
+      padding: 48px 64px 100px 64px;
+    }
+
+    /* Top Banner / Hero */
+    .hero-banner {
+      background: radial-gradient(circle at 10% 20%, rgba(99, 102, 241, 0.15) 0%, transparent 60%),
+                  radial-gradient(circle at 90% 80%, rgba(139, 92, 246, 0.1) 0%, transparent 50%),
+                  var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-lg);
+      padding: 36px 36px;
+      margin-bottom: 48px;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .hero-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(16, 185, 129, 0.12);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      color: var(--accent-emerald);
+      padding: 4px 12px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 16px;
+    }
+
+    .hero-title {
+      font-size: 34px;
+      font-weight: 800;
+      letter-spacing: -0.8px;
+      line-height: 1.25;
+      margin-bottom: 14px;
+      background: linear-gradient(135deg, #ffffff 0%, #cbd5e1 100%);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .hero-subtitle {
+      font-size: 16px;
+      color: var(--text-secondary);
+      max-width: 720px;
+      line-height: 1.6;
+      margin-bottom: 24px;
+    }
+
+    .hero-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    .tag-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-color);
+      padding: 6px 12px;
+      border-radius: 30px;
+      font-size: 12px;
+      color: var(--text-secondary);
+      font-weight: 500;
+    }
+
+    /* Section Styling */
+    .docs-section {
+      margin-bottom: 64px;
+      scroll-margin-top: 36px;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 16px;
+    }
+
+    .section-num {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: rgba(99, 102, 241, 0.15);
+      color: var(--accent-indigo);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: 700;
+      font-size: 14px;
+      border: 1px solid rgba(99, 102, 241, 0.3);
+    }
+
+    h2 {
+      font-size: 24px;
+      font-weight: 700;
+      letter-spacing: -0.4px;
+      color: #fff;
+    }
+
+    h3 {
+      font-size: 18px;
+      font-weight: 600;
+      margin: 24px 0 12px 0;
+      color: #e2e8f0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    p {
+      color: var(--text-secondary);
+      margin-bottom: 16px;
+      font-size: 15px;
+    }
+
+    /* Feature Cards Grid */
+    .cards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 18px;
+      margin: 24px 0;
+    }
+
+    .card {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 22px;
+      transition: transform 0.2s ease, border-color 0.2s ease;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .card:hover {
+      transform: translateY(-2px);
+      border-color: var(--border-accent);
+      background: var(--bg-surface);
+    }
+
+    .card-icon {
+      font-size: 26px;
+      margin-bottom: 12px;
+      display: inline-block;
+    }
+
+    .card-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 8px;
+    }
+
+    .card-text {
+      font-size: 13.5px;
+      color: var(--text-muted);
+      line-height: 1.55;
+      margin-bottom: 0;
+    }
+
+    /* Callout & Alerts */
+    .callout {
+      background: rgba(99, 102, 241, 0.08);
+      border-left: 4px solid var(--accent-indigo);
+      border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
+      padding: 16px 20px;
+      margin: 20px 0;
+    }
+
+    .callout.success {
+      background: rgba(16, 185, 129, 0.08);
+      border-color: var(--accent-emerald);
+    }
+
+    .callout.amber {
+      background: rgba(245, 158, 11, 0.08);
+      border-color: var(--accent-amber);
+    }
+
+    .callout-title {
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 4px;
+      font-size: 14px;
+    }
+
+    /* Tables */
+    .table-container {
+      width: 100%;
+      overflow-x: auto;
+      margin: 20px 0;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      background: var(--bg-secondary);
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 14px;
+    }
+
+    th {
+      background: var(--bg-surface);
+      color: var(--text-primary);
+      padding: 12px 18px;
+      font-weight: 600;
+      border-bottom: 1px solid var(--border-color);
+      font-size: 13px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    td {
+      padding: 14px 18px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+      color: var(--text-secondary);
+    }
+
+    tr:last-child td {
+      border-bottom: none;
+    }
+
+    kbd {
+      background: var(--bg-surface);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 4px;
+      padding: 2px 7px;
+      font-size: 12px;
+      font-family: var(--font-mono);
+      color: #cbd5e1;
+      box-shadow: 0 1px 0 rgba(0, 0, 0, 0.4);
+    }
+
+    code {
+      font-family: var(--font-mono);
+      font-size: 13px;
+      background: rgba(255, 255, 255, 0.06);
+      padding: 2px 6px;
+      border-radius: 4px;
+      color: #e2e8f0;
+    }
+
+    pre {
+      background: #0d1117;
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-sm);
+      padding: 16px 20px;
+      overflow-x: auto;
+      font-family: var(--font-mono);
+      font-size: 13px;
+      color: #c9d1d9;
+      margin: 16px 0;
+      line-height: 1.5;
+    }
+
+    /* Interactive Comparison Simulator */
+    .compare-container {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: var(--radius-md);
+      padding: 24px;
+      margin: 24px 0;
+    }
+
+    .compare-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .vibrance-slider-wrap {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      background: var(--bg-surface);
+      padding: 10px 18px;
+      border-radius: var(--radius-sm);
+      border: 1px solid var(--border-color);
+    }
+
+    .vibrance-slider {
+      accent-color: var(--accent-indigo);
+      cursor: pointer;
+    }
+
+    .vibrance-val {
+      font-family: var(--font-mono);
+      font-weight: 700;
+      color: var(--accent-indigo);
+      min-width: 48px;
+    }
+
+    .demo-preview-box {
+      width: 100%;
+      height: 240px;
+      border-radius: var(--radius-sm);
+      background: linear-gradient(135deg, #2a1532 0%, #171d33 50%, #162a26 100%);
+      position: relative;
+      overflow: hidden;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .demo-badge-wrap {
+      text-align: center;
+      z-index: 2;
+    }
+
+    .demo-badge-wrap h4 {
+      font-size: 20px;
+      font-weight: 700;
+      color: #fff;
+      margin-bottom: 6px;
+    }
+
+    .demo-badge-wrap p {
+      font-size: 13px;
+      color: #cbd5e1;
+      max-width: 400px;
+      margin: 0 auto;
+    }
+
+    /* Print / Responsive */
+    @media (max-width: 900px) {
+      .docs-sidebar {
+        display: none;
+      }
+      .docs-main {
+        margin-left: 0;
+        padding: 24px 20px;
+      }
+      .hero-title {
+        font-size: 26px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+<div class="docs-wrapper">
+
+  <!-- Sidebar -->
+  <aside class="docs-sidebar">
+    <div class="brand-header">
+      <img src="assets/AiPhotoFlow_Logo.svg" alt="Ai PhotoFlow Logo" class="brand-logo">
+      <div>
+        <div class="brand-title">Ai PhotoFlow</div>
+        <span class="brand-badge">Enterprise v1.0</span>
+      </div>
+    </div>
+
+    <div class="search-box">
+      <span class="search-icon">🔍</span>
+      <input type="text" id="searchInput" class="search-input" placeholder="Search functions...">
+    </div>
+
+    <div class="nav-group-title">Core Systems</div>
+    <ul class="nav-list">
+      <li class="nav-item"><a href="#overview" class="active"><span class="icon">⚡</span> Overview & Architecture</a></li>
+      <li class="nav-item"><a href="#culling"><span class="icon">🔍</span> AI Culling & Sharpness</a></li>
+      <li class="nav-item"><a href="#duplicates"><span class="icon">👥</span> Duplicate & AI Best Shot</a></li>
+      <li class="nav-item"><a href="#color"><span class="icon">🎨</span> AI Color & +5% Vibrance</a></li>
+      <li class="nav-item"><a href="#export"><span class="icon">🚀</span> Batch Export & Watermark</a></li>
+      <li class="nav-item"><a href="#security"><span class="icon">🔒</span> Licensing & Anti-Tamper</a></li>
+      <li class="nav-item"><a href="#shortcuts"><span class="icon">🎹</span> Keyboard Ergonomics</a></li>
+    </ul>
+
+    <div class="nav-group-title">Future Expansion</div>
+    <ul class="nav-list">
+      <li class="nav-item"><a href="#future-v2"><span class="icon">🔮</span> V2 Future Roadmap</a></li>
+    </ul>
+  </aside>
+
+  <!-- Main Content Area -->
+  <main class="docs-main">
+
+    <!-- Hero Banner -->
+    <div class="hero-banner" id="overview">
+      <div class="hero-pill">⚡ Enterprise Production Documentation</div>
+      <h1 class="hero-title">Ai PhotoFlow Functions & Features Guide</h1>
+      <p class="hero-subtitle">
+        Comprehensive architectural and functional documentation covering every automated rule, computer vision model, color science algorithm, and future roadmap item of Ai PhotoFlow.
+      </p>
+      <div class="hero-badges">
+        <span class="tag-badge">🛡️ Offline-First Local Engine</span>
+        <span class="tag-badge">📷 RAW & JPG Multi-Cam Support</span>
+        <span class="tag-badge">✨ +5% Vibrance Boost Engine</span>
+        <span class="tag-badge">👥 Perceptual Duplicate Winner</span>
+        <span class="tag-badge">👑 Indian Skin Tone Safe</span>
+      </div>
+    </div>
+
+    <!-- Section 1: Overview & Architecture -->
+    <section class="docs-section">
+      <div class="section-header">
+        <span class="section-num">01</span>
+        <h2>System Architecture & Pipeline</h2>
+      </div>
+      <p>
+        Ai PhotoFlow operates as a dual-tier desktop ecosystem combining an ultra-fast hardware-accelerated <strong>Electron + React 19</strong> user interface with an asynchronous <strong>Python 3.9+ / OpenCV / LibRaw</strong> AI execution engine.
+      </p>
+
+      <div class="cards-grid">
+        <div class="card">
+          <div class="card-icon">⚡</div>
+          <div class="card-title">Zero-Latency Ingestion</div>
+          <p class="card-text">Direct dual-tier decoding extracting camera-embedded EXIF preview buffers in &lt;15ms for instant 10,000+ photo scrolling.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">🔒</div>
+          <div class="card-title">100% Non-Destructive</div>
+          <p class="card-text">Original camera cards and RAW files are strictly mounted read-only. Metadata and edits are safely recorded in SQLite catalogs.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">💻</div>
+          <div class="card-title">Cross-Platform Native</div>
+          <p class="card-text">Compiled with native Apple Silicon (arm64) and Windows (x64) executables without external cloud dependencies.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section 2: AI Culling & Sharpness -->
+    <section class="docs-section" id="culling">
+      <div class="section-header">
+        <span class="section-num">02</span>
+        <h2>AI Culling & Quality Assessment</h2>
+      </div>
+      <p>
+        During wedding shoots, photographers capture thousands of rapid frames. The Culling Engine automatically categorizes photos into <strong>BEST, PICK, REVIEW, or REJECT</strong>.
+      </p>
+
+      <div class="callout">
+        <div class="callout-title">Four-Stage Decision Pipeline:</div>
+        Each image is analyzed across four orthogonal computer vision dimensions:
+      </div>
+
+      <div class="cards-grid">
+        <div class="card">
+          <div class="card-title">1. Laplacian Sharpness Metric</div>
+          <p class="card-text">Evaluates high-frequency spatial gradients. Distinguishes artistic lens bokeh from camera shake or missed focus.</p>
+        </div>
+        <div class="card">
+          <div class="card-title">2. Eye & Blinking Status</div>
+          <p class="card-text">Detects faces and computes the Eye Aspect Ratio (EAR). Automatically flags closed eyes, mid-blink expressions, and squinting.</p>
+        </div>
+        <div class="card">
+          <div class="card-title">3. Dynamic Range & Clipping</div>
+          <p class="card-text">Inspects highlight blowouts (bridal jewelry, silk whites) and shadow crush (groom tuxedo, black suits).</p>
+        </div>
+        <div class="card">
+          <div class="card-title">4. Composite Quality Score</div>
+          <p class="card-text">Synthesizes all measurements into a unified score (0 to 100). Scores above 85 are classified as potential AI Best winners.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section 3: Duplicate Clustering & Winner Selection -->
+    <section class="docs-section" id="duplicates">
+      <div class="section-header">
+        <span class="section-num">03</span>
+        <h2>Duplicate Burst Clustering & AI Best Shot</h2>
+      </div>
+      <p>
+        When photographers shoot bursts (3 to 10 frames of the same moment), Ai PhotoFlow clusters them using a 3-layer perceptual similarity algorithm:
+      </p>
+
+      <pre><code>// Perceptual Burst Clustering Rule:
+1. Timestamp Delta (Δt ≤ 3.5s)
+2. Perceptual Structural Hash (dHash & pHash 64-bit vector correlation)
+3. HSV Normalized Color Histogram Intersection (Similarity ≥ 0.90)</code></pre>
+
+      <div class="callout success">
+        <div class="callout-title">The "AI Best Only" Rule:</div>
+        In the <strong>AI Best</strong> gallery view, only the single top-ranking winner of each burst set is displayed. Secondary duplicates are automatically hidden and routed to the <strong>Similar</strong> view, keeping the main gallery clean and clutter-free!
+      </div>
+    </section>
+
+    <!-- Section 4: AI Color Engine & +5% Vibrance Boost -->
+    <section class="docs-section" id="color">
+      <div class="section-header">
+        <span class="section-num">04</span>
+        <h2>AI Color Science & +5% Vibrance Boost</h2>
+      </div>
+      <p>
+        Western auto-editors frequently ruin Indian wedding photos by turning warm skin orange or over-saturating bridal attire. Ai PhotoFlow solves this with dedicated color science algorithms:
+      </p>
+
+      <div class="cards-grid">
+        <div class="card">
+          <div class="card-title">YCrCb Skin Tone Isolation</div>
+          <p class="card-text">Restricts corrections to human skin chrominance coordinates (Cr: 133–173, Cb: 77–127) to preserve natural warmth without reddish/magenta casts.</p>
+        </div>
+        <div class="card">
+          <div class="card-title">Pure Light White Balance</div>
+          <p class="card-text">Neutralizes fluorescent greens, yellow halogen spill, and cyan LED stage lights without washing out festive mandap fire ambiance.</p>
+        </div>
+        <div class="card">
+          <div class="card-title">+5% Universal Vibrance Boost</div>
+          <p class="card-text">Every edited photo receives a calibrated +5% baseline vibrance boost. Boosts flowers, lehengas, and backgrounds while protecting skin.</p>
+        </div>
+      </div>
+
+      <!-- Interactive Vibrance Demo Simulation -->
+      <div class="compare-container">
+        <div class="compare-header">
+          <h3 style="margin: 0;">Interactive +5% Vibrance Engine Simulation</h3>
+          <div class="vibrance-slider-wrap">
+            <label for="vibranceDemo" style="font-size: 13px; font-weight: 600;">Vibrance:</label>
+            <input type="range" id="vibranceDemo" class="vibrance-slider" min="0" max="30" value="5" oninput="updateVibrance(this.value)">
+            <span id="vibranceVal" class="vibrance-val">+5%</span>
+          </div>
+        </div>
+
+        <div class="demo-preview-box" id="demoBox">
+          <div class="demo-badge-wrap">
+            <h4 id="demoStatusTitle">Default Production Baseline: +5% Vibrance Active</h4>
+            <p id="demoStatusText">Enhances floral decorations and bridal fabrics while maintaining 100% natural, cream Indian skin tone tones.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section 5: Batch Export & Watermarking -->
+    <section class="docs-section" id="export">
+      <div class="section-header">
+        <span class="section-num">05</span>
+        <h2>Enterprise Batch Export & Watermarking</h2>
+      </div>
+      <p>
+        The export module renders processed photos in parallel across multi-core worker queues without ever altering original camera files.
+      </p>
+
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th>Export Profile</th>
+              <th>Resolution</th>
+              <th>Format</th>
+              <th>Target Output Directory</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Master High-Res</strong></td>
+              <td>100% Original Camera Dimension</td>
+              <td>JPEG (100%) / TIFF</td>
+              <td><code>/Export/AI-Edited/</code></td>
+            </tr>
+            <tr>
+              <td><strong>Social Media Web</strong></td>
+              <td>2048px Long Edge (Optimized sRGB)</td>
+              <td>JPEG (82%) / WebP</td>
+              <td><code>/Export/Web-Optimized/</code></td>
+            </tr>
+            <tr>
+              <td><strong>Client Proofing</strong></td>
+              <td>1080p (With Dynamic Watermark)</td>
+              <td>JPEG (75%)</td>
+              <td><code>/Export/Proofing/</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="callout amber">
+        <div class="callout-title">Multi-Position Custom Watermark Overlay:</div>
+        Supports studio PNG logos and custom text with 9-point anchor alignment, diagonal anti-theft proofing tiles, and precision opacity (0% to 100%).
+      </div>
+    </section>
+
+    <!-- Section 6: Security & Licensing -->
+    <section class="docs-section" id="security">
+      <div class="section-header">
+        <span class="section-num">06</span>
+        <h2>Hardware Fingerprinting & Anti-Crack Protection</h2>
+      </div>
+      <p>
+        To prevent pirated copies and unapproved distribution, Ai PhotoFlow implements cryptographic hardware locking:
+      </p>
+
+      <div class="cards-grid">
+        <div class="card">
+          <div class="card-title">Motherboard UUID + CPU Hash</div>
+          <p class="card-text">Binds the software activation strictly to the physical motherboard and processor identifiers of the workstation.</p>
+        </div>
+        <div class="card">
+          <div class="card-title">HMAC-SHA256 Signatures</div>
+          <p class="card-text">License keys (<code>FLOW-XXXX-XXXX-XXXX-XXXX</code>) are cryptographically validated offline using mathematical secret-salt signatures.</p>
+        </div>
+        <div class="card">
+          <div class="card-title">Anti-Clock Rollback</div>
+          <p class="card-text">Detects unauthorized system clock tampering to prevent users from artificially resetting trial expiration timers.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Section 7: Keyboard Shortcuts -->
+    <section class="docs-section" id="shortcuts">
+      <div class="section-header">
+        <span class="section-num">07</span>
+        <h2>Photographer Keyboard Shortcuts</h2>
+      </div>
+      <p>
+        Engineered for rapid single-handed culling, eliminating repetitive mouse movements:
+      </p>
+
+      <div class="table-container">
+        <table>
+          <thead>
+            <tr>
+              <th style="width: 140px;">Shortcut</th>
+              <th>Action</th>
+              <th>Stage</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr><td><kbd>P</kbd></td><td><strong>Pick / Select</strong> photo</td><td>Culling</td></tr>
+            <tr><td><kbd>X</kbd></td><td><strong>Reject</strong> photo</td><td>Culling</td></tr>
+            <tr><td><kbd>U</kbd></td><td><strong>Unflag</strong> / Reset state</td><td>Culling</td></tr>
+            <tr><td><kbd>1</kbd> - <kbd>5</kbd></td><td>Assign <strong>Star Rating</strong> (1★ - 5★)</td><td>Rating</td></tr>
+            <tr><td><kbd>0</kbd></td><td>Clear Star Rating</td><td>Rating</td></tr>
+            <tr><td><kbd>Space</kbd></td><td>Toggle <strong>Before / After</strong> Split View</td><td>Editing</td></tr>
+            <tr><td><kbd>C</kbd></td><td>Open <strong>Burst Compare</strong> dialog</td><td>Culling</td></tr>
+            <tr><td><kbd>E</kbd></td><td>Run <strong>AI Auto-Edit</strong> on active photo</td><td>Editing</td></tr>
+            <tr><td><kbd>←</kbd> / <kbd>→</kbd></td><td>Navigate previous / next image</td><td>Global</td></tr>
+            <tr><td><kbd>Esc</kbd></td><td>Return to Grid View / Close modal</td><td>Global</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Section 8: Future Roadmap (V2) -->
+    <section class="docs-section" id="future-v2">
+      <div class="section-header">
+        <span class="section-num">08</span>
+        <h2>Future Roadmap & V2 Capabilities</h2>
+      </div>
+      <p>
+        Ai PhotoFlow's modular abstract interfaces (<code>backend/core/interfaces.py</code>) are built to host upcoming next-generation capabilities:
+      </p>
+
+      <div class="cards-grid">
+        <div class="card">
+          <div class="card-icon">✨</div>
+          <div class="card-title">AI Facial Retouching & Blemish Removal (Q1)</div>
+          <p class="card-text">Automated frequency separation AI to remove transient blemishes, soften eye bags, and whiten teeth while retaining 100% natural skin texture.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">🎭</div>
+          <div class="card-title">Semantic AI Subject & Sky Masking (Q2)</div>
+          <p class="card-text">Pixel-accurate subject isolation to adjust the couple's exposure independently of the background mandap lighting.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">🧹</div>
+          <div class="card-title">Generative Object & Wire Removal (Q3)</div>
+          <p class="card-text">One-click removal of microphone cables, light stands, and unwanted photobombers during sensitive wedding ceremonies.</p>
+        </div>
+        <div class="card">
+          <div class="card-icon">🔌</div>
+          <div class="card-title">Adobe Lightroom & Photoshop Sync (Q4)</div>
+          <p class="card-text">Direct <code>.XMP</code> sidecar metadata sync and Adobe Photoshop UXP panel integration for seamless workflow interoperability.</p>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+  // Live Search Filter
+  const searchInput = document.getElementById('searchInput');
+  const sections = document.querySelectorAll('.docs-section');
+
+  searchInput.addEventListener('input', (e) => {
+    const term = e.target.value.toLowerCase().trim();
+    sections.forEach(section => {
+      const text = section.innerText.toLowerCase();
+      if (term === '' || text.includes(term)) {
+        section.style.display = 'block';
+      } else {
+        section.style.display = 'none';
+      }
+    });
+  });
+
+  // Active Nav Link Highlight on Scroll
+  window.addEventListener('scroll', () => {
+    let current = '';
+    sections.forEach(section => {
+      const sectionTop = section.offsetTop - 100;
+      if (pageYOffset >= sectionTop) {
+        current = section.getAttribute('id') || 'overview';
+      }
+    });
+
+    document.querySelectorAll('.nav-item a').forEach(a => {
+      a.classList.remove('active');
+      if (a.getAttribute('href') === `#${current}`) {
+        a.classList.add('active');
+      }
+    });
+  });
+
+  // Vibrance Demo Simulator
+  function updateVibrance(val) {
+    const num = parseInt(val, 10);
+    const label = document.getElementById('vibranceVal');
+    const demoBox = document.getElementById('demoBox');
+    const title = document.getElementById('demoStatusTitle');
+    const text = document.getElementById('demoStatusText');
+
+    label.textContent = `+${num}%`;
+    
+    // Adjust visual saturation and brightness of demo box
+    const sat = 100 + (num * 3.5);
+    demoBox.style.filter = `saturate(${sat}%) contrast(${100 + num * 0.5}%)`;
+
+    if (num === 5) {
+      title.textContent = "Default Production Baseline: +5% Vibrance Active";
+      text.textContent = "Calibrated for Indian weddings: Boosts floral garlands and silks while keeping skin tones creamy and natural.";
+    } else if (num > 15) {
+      title.textContent = "High Vibrance Boost (Celebration / Festive)";
+      text.textContent = "Heavy saturation boost for Sangeet & Haldi ceremonies with dynamic party lighting.";
+    } else {
+      title.textContent = `Custom Vibrance Boost (+${num}%)`;
+      text.textContent = `Real-time non-destructive vibrance calculation applied cleanly across all color channels.`;
+    }
+  }
+</script>
+
+</body>
+</html>
