@@ -6,23 +6,76 @@ const fs = require('fs');
 let mainWindow = null;
 let pythonProcess = null;
 
+function killPythonProcess() {
+  if (!pythonProcess) return;
+  try {
+    if (process.platform === 'win32' && pythonProcess.pid) {
+      spawn('taskkill', ['/pid', pythonProcess.pid.toString(), '/f', '/t']);
+    } else {
+      pythonProcess.kill('SIGTERM');
+    }
+  } catch (e) {
+    console.error('Error stopping Python process:', e);
+  }
+  pythonProcess = null;
+}
+
 function startPythonBackend() {
   let pythonBin;
-  let pythonArgs;
+  let pythonArgs = [];
   let cwd;
   const isWin = process.platform === 'win32';
 
   if (app.isPackaged) {
-    const binName = isWin ? 'photoflow-backend.exe' : 'photoflow-backend';
-    pythonBin = path.join(process.resourcesPath, 'photoflow-backend', binName);
-    if (!isWin && fs.existsSync(pythonBin)) {
-      try {
-        fs.chmodSync(pythonBin, 0o755);
-      } catch (e) {}
+    if (isWin) {
+      // 1. Check for standalone compiled executable (PyInstaller on Windows)
+      const exeCandidate = path.join(process.resourcesPath, 'photoflow-backend', 'photoflow-backend.exe');
+      // 2. Check for bundled standalone Windows Python runtime
+      const winPyCandidate1 = path.join(process.resourcesPath, 'photoflow-backend-win', 'python', 'python.exe');
+      const winPyCandidate2 = path.join(process.resourcesPath, 'python-win', 'python.exe');
+
+      if (fs.existsSync(exeCandidate)) {
+        pythonBin = exeCandidate;
+        pythonArgs = [];
+        cwd = path.join(process.resourcesPath, 'photoflow-backend');
+      } else if (fs.existsSync(winPyCandidate1)) {
+        pythonBin = winPyCandidate1;
+        pythonArgs = [path.join(process.resourcesPath, 'photoflow-backend-win', 'backend_entry.py')];
+        cwd = path.join(process.resourcesPath, 'photoflow-backend-win');
+      } else if (fs.existsSync(winPyCandidate2)) {
+        pythonBin = winPyCandidate2;
+        pythonArgs = [path.join(process.resourcesPath, 'backend_entry.py')];
+        cwd = process.resourcesPath;
+      } else {
+        // Fallback: search system Python installations on Windows
+        const sysPythonPaths = [
+          path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python310', 'python.exe'),
+          path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python311', 'python.exe'),
+          path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python312', 'python.exe'),
+          path.join(process.env.LOCALAPPDATA || '', 'Programs', 'Python', 'Python39', 'python.exe'),
+          'C:\\Python310\\python.exe',
+          'C:\\Python311\\python.exe',
+          'C:\\Python39\\python.exe',
+          'python.exe',
+          'py.exe'
+        ];
+        pythonBin = sysPythonPaths.find(p => fs.existsSync(p)) || 'python';
+        pythonArgs = [path.join(process.resourcesPath, 'backend_entry.py')];
+        cwd = process.resourcesPath;
+      }
+    } else {
+      // macOS / Linux
+      pythonBin = path.join(process.resourcesPath, 'photoflow-backend', 'photoflow-backend');
+      if (fs.existsSync(pythonBin)) {
+        try {
+          fs.chmodSync(pythonBin, 0o755);
+        } catch (e) {}
+      }
+      pythonArgs = [];
+      cwd = process.resourcesPath;
     }
-    pythonArgs = [];
-    cwd = process.resourcesPath;
   } else {
+    // Development mode
     const venvPython = isWin
       ? path.join(__dirname, '..', 'venv', 'Scripts', 'python.exe')
       : path.join(__dirname, '..', 'venv', 'bin', 'python3');
@@ -32,6 +85,19 @@ function startPythonBackend() {
   }
 
   console.log(`Starting Python AI service from: ${pythonBin}...`);
+  console.log(`Args: ${JSON.stringify(pythonArgs)}, CWD: ${cwd}`);
+
+  // Persistent disk logger for easy troubleshooting
+  let logStream = null;
+  try {
+    const userHome = app.getPath('home');
+    const logDir = path.join(userHome, '.photoflow');
+    if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
+    const logFilePath = path.join(logDir, 'backend.log');
+    logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
+    logStream.write(`\n--- [${new Date().toISOString()}] Launching Backend: ${pythonBin} ---\n`);
+  } catch (e) {}
+
   try {
     pythonProcess = spawn(pythonBin, pythonArgs, {
       cwd: cwd,
@@ -40,17 +106,26 @@ function startPythonBackend() {
 
     pythonProcess.stdout.on('data', (data) => {
       console.log(`[Python AI]: ${data}`);
+      if (logStream) logStream.write(`[STDOUT] ${data}`);
     });
 
     pythonProcess.stderr.on('data', (data) => {
       console.error(`[Python AI Err]: ${data}`);
+      if (logStream) logStream.write(`[STDERR] ${data}`);
     });
 
     pythonProcess.on('error', (err) => {
       console.error('[Python Process Error]:', err);
+      if (logStream) logStream.write(`[PROC_ERR] ${err}\n`);
+    });
+
+    pythonProcess.on('exit', (code, signal) => {
+      console.log(`[Python AI Exited]: code ${code}, signal ${signal}`);
+      if (logStream) logStream.write(`[EXIT] code ${code}, signal ${signal}\n`);
     });
   } catch (err) {
     console.error('Failed to launch Python backend process:', err);
+    if (logStream) logStream.write(`[SPAWN_ERR] ${err}\n`);
   }
 }
 
@@ -122,17 +197,12 @@ app.whenReady().then(() => {
 });
 
 app.on('window-all-closed', () => {
-  if (pythonProcess) {
-    console.log('Stopping Python backend...');
-    pythonProcess.kill();
-  }
+  killPythonProcess();
   if (process.platform !== 'darwin') {
     app.quit();
   }
 });
 
 app.on('will-quit', () => {
-  if (pythonProcess) {
-    pythonProcess.kill();
-  }
+  killPythonProcess();
 });

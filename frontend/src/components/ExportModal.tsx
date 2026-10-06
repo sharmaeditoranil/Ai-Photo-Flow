@@ -98,10 +98,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   };
 
   const setQuickLocation = (loc: 'same' | 'desktop') => {
+    const isWin = (window as any).electronAPI?.platform === 'win32';
+    const sep = isWin ? '\\' : '/';
     if (loc === 'same' && defaultFolder) {
-      setOutputFolder(`${defaultFolder}/AI_PhotoFlow_Export`);
+      setOutputFolder(`${defaultFolder}${sep}AI_PhotoFlow_Export`);
     } else if (loc === 'desktop') {
-      setOutputFolder('/Users/anilsharma/Desktop/Ai_PhotoFlow_Export');
+      setOutputFolder(isWin ? 'C:\\Ai_PhotoFlow_Export' : '/Users/anilsharma/Desktop/Ai_PhotoFlow_Export');
     }
   };
 

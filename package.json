@@ -28,12 +28,6 @@
       "build/icon.ico",
       "package.json"
     ],
-    "extraResources": [
-      {
-        "from": "dist-backend/photoflow-backend",
-        "to": "photoflow-backend"
-      }
-    ],
     "win": {
       "target": [
         {
@@ -43,7 +37,13 @@
           ]
         }
       ],
-      "icon": "build/icon.ico"
+      "icon": "build/icon.ico",
+      "extraResources": [
+        {
+          "from": "dist-backend-win",
+          "to": "photoflow-backend-win"
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,
@@ -58,7 +58,13 @@
         "dmg"
       ],
       "icon": "build/icon.png",
-      "identity": null
+      "identity": null,
+      "extraResources": [
+        {
+          "from": "dist-backend/photoflow-backend",
+          "to": "photoflow-backend"
+        }
+      ]
     },
     "dmg": {
       "title": "Ai PhotoFlow Installer",

@@ -26,8 +26,9 @@ export const ImportModal: React.FC<ImportModalProps> = ({
         if (path) {
           setFolderPath(path);
           if (!projectName) {
-            const parts = path.split('/');
-            setProjectName(`Wedding – ${parts[parts.length - 1] || 'Shoot'}`);
+            const parts = path.split(/[/\\]/).filter(Boolean);
+            const folderName = parts[parts.length - 1] || 'Shoot';
+            setProjectName(`Wedding – ${folderName}`);
           }
         }
       }
@@ -38,7 +39,9 @@ export const ImportModal: React.FC<ImportModalProps> = ({
 
   const handleLoadSample = () => {
     // Current workspace sample wedding folder
-    const samplePath = '/Users/anilsharma/Documents/Anil Sharma Final Website Meterial/Ai PhotoFlow /sample_wedding_photos';
+    const samplePath = (window as any).electronAPI?.platform === 'win32'
+      ? 'C:\\sample_wedding_photos'
+      : '/Users/anilsharma/Documents/Anil Sharma Final Website Meterial/Ai PhotoFlow /sample_wedding_photos';
     setFolderPath(samplePath);
     setProjectName('Wedding – Rahul & Priya (Sample Dataset)');
   };

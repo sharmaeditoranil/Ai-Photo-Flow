@@ -4,33 +4,49 @@ const API_BASE = (typeof window !== 'undefined' && window.location.protocol === 
   ? 'http://127.0.0.1:8000/api'
   : '/api';
 
+async function fetchWithRetry(url: string, options?: RequestInit, retries = 4, delayMs = 800): Promise<Response> {
+  let lastError: any = null;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, options);
+      return res;
+    } catch (err: any) {
+      lastError = err;
+      if (attempt < retries) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+      }
+    }
+  }
+  throw new Error(`Cannot connect to AI Processing Engine (127.0.0.1:8000). Please wait 3 seconds and try again. (${lastError?.message || lastError})`);
+}
+
 export const api = {
   // Projects
   async getProjects(): Promise<Project[]> {
-    const res = await fetch(`${API_BASE}/projects`);
+    const res = await fetchWithRetry(`${API_BASE}/projects`);
     if (!res.ok) throw new Error('Failed to fetch projects');
     return res.json();
   },
 
   async getProject(id: number): Promise<Project> {
-    const res = await fetch(`${API_BASE}/projects/${id}`);
+    const res = await fetchWithRetry(`${API_BASE}/projects/${id}`);
     if (!res.ok) throw new Error('Failed to fetch project details');
     return res.json();
   },
 
   async deleteProject(projectId: number): Promise<void> {
-    const res = await fetch(`${API_BASE}/projects/${projectId}`, { method: 'DELETE' });
+    const res = await fetchWithRetry(`${API_BASE}/projects/${projectId}`, { method: 'DELETE' });
     if (!res.ok) throw new Error('Failed to delete project');
   },
 
   async importFolder(folderPath: string, projectName?: string): Promise<{ project_id: number; total_photos: number }> {
-    const res = await fetch(`${API_BASE}/projects/import`, {
+    const res = await fetchWithRetry(`${API_BASE}/projects/import`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ folder_path: folderPath, project_name: projectName }),
     });
     if (!res.ok) {
-      const err = await res.json();
+      const err = await res.json().catch(() => ({ detail: 'Unknown error' }));
       throw new Error(err.detail || 'Failed to import folder');
     }
     return res.json();
