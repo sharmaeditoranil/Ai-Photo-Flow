@@ -30,14 +30,14 @@ ADMIN_MASTER_PIN = "Anil@#140477"
 # Standard Pricing
 PRICING_CATALOG = {
     "INR": {
-        "PRO": {"monthly": 1499, "yearly": 11999},
-        "STUDIO": {"monthly": 2999, "yearly": 23999},
-        "EVENT": {"single": 499}
+        "PRO": {"monthly": 499, "yearly": 3499},
+        "STUDIO": {"monthly": 999, "yearly": 6999},
+        "EVENT": {"single": 299}
     },
     "USD": {
-        "PRO": {"monthly": 19, "yearly": 149},
-        "STUDIO": {"monthly": 39, "yearly": 299},
-        "EVENT": {"single": 7}
+        "PRO": {"monthly": 7, "yearly": 45},
+        "STUDIO": {"monthly": 14, "yearly": 89},
+        "EVENT": {"single": 5}
     }
 }
 

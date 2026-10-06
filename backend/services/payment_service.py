@@ -91,9 +91,9 @@ class PaymentService:
         else:
             # Fallback to standard catalog price
             if plan_id_clean == "STUDIO":
-                final_price = 23999 if billing_cycle_clean == "yearly" else 2999
+                final_price = 6999 if billing_cycle_clean == "yearly" else 999
             else:
-                final_price = 11999 if billing_cycle_clean == "yearly" else 1499
+                final_price = 3499 if billing_cycle_clean == "yearly" else 499
 
         amount_in_paise = int(final_price * 100) # Razorpay expects amount in paise
         config = self.get_razorpay_config()

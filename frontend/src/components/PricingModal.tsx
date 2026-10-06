@@ -79,18 +79,18 @@ export const PricingModal: React.FC<PricingModalProps> = ({
   // Base Prices
   const basePrices = {
     INR: {
-      pro_monthly: 1499,
-      pro_yearly: 11999,
-      studio_monthly: 2999,
-      studio_yearly: 23999,
-      event: 499
+      pro_monthly: 499,
+      pro_yearly: 3499,
+      studio_monthly: 999,
+      studio_yearly: 6999,
+      event: 299
     },
     USD: {
-      pro_monthly: 19,
-      pro_yearly: 149,
-      studio_monthly: 39,
-      studio_yearly: 299,
-      event: 7
+      pro_monthly: 7,
+      pro_yearly: 45,
+      studio_monthly: 14,
+      studio_yearly: 89,
+      event: 5
     }
   };
 
@@ -502,7 +502,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                       borderRadius: '6px',
                       fontWeight: 700
                     }}>
-                      Save 33%
+                      Save 42%
                     </span>
                   </button>
                 </div>
