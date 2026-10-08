@@ -422,7 +422,8 @@ class BatchManager:
                 os.makedirs(output_folder, exist_ok=True)
                 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-                num_workers = min(4, max(2, (os.cpu_count() or 4)))
+                # Optimize concurrency based on CPU hardware
+                num_workers = min(6, max(2, (os.cpu_count() or 4)))
                 completed_count = 0
 
                 def export_single(item):
@@ -434,7 +435,7 @@ class BatchManager:
                     base_name, _ = os.path.splitext(p["filename"])
 
                     if choice in ("BEST", "SELECTED"):
-                        subfolder = "AI-Edited" if p["is_edited"] else "AI-Selected"
+                        subfolder = "AI-Edited" if p.get("is_edited") else "AI-Selected"
                     elif choice == "REJECT":
                         subfolder = "Rejected"
                     else:
@@ -447,8 +448,9 @@ class BatchManager:
                     dest_path = os.path.join(dest_dir, new_filename)
 
                     try:
-                        params_dict = json.loads(p["edit_params"]) if p["edit_params"] else {}
-                        params = EditParameters.from_dict(params_dict)
+                        is_edited = bool(p.get("is_edited", 0))
+                        params_dict = json.loads(p["edit_params"]) if (p.get("edit_params") and is_edited) else {}
+                        params = EditParameters.from_dict(params_dict) if params_dict else None
                         export_photo(
                             source_path=src_path,
                             target_path=dest_path,

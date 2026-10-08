@@ -125,8 +125,8 @@ export const ImportModal: React.FC<ImportModalProps> = ({
               <input
                 type="text"
                 value={folderPath}
-                onChange={(e) => setFolderPath(e.target.value)}
-                placeholder="/Users/username/Pictures/Wedding_Shoot"
+                onChange={(e) => setFolderPath(e.target.value.trim().replace(/^["']|["']$/g, ''))}
+                placeholder="C:\Users\Photographer\Pictures\Wedding_Shoot"
                 style={{
                   flex: 1,
                   background: '#121418',
@@ -143,9 +143,13 @@ export const ImportModal: React.FC<ImportModalProps> = ({
                 onClick={handleSelectFolderNative}
                 className="btn btn-secondary"
                 title="Browse folders"
+                style={{ borderColor: '#3b82f6', color: '#60a5fa' }}
               >
                 Browse...
               </button>
+            </div>
+            <div style={{ fontSize: '11px', color: '#64748b', marginTop: '4px' }}>
+              Supported: JPG, JPEG, PNG, Sony ARW, Canon CR2/CR3, Nikon NEF, Fuji RAF, DNG, TIFF
             </div>
           </div>
 
@@ -171,16 +175,30 @@ export const ImportModal: React.FC<ImportModalProps> = ({
             />
           </div>
 
+          {isLoading && (
+            <div style={{ background: '#161d2d', border: '1px solid #2563eb', padding: '10px 14px', borderRadius: '6px', fontSize: '12px', color: '#93c5fd', display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <div style={{ width: '14px', height: '14px', border: '2px solid #60a5fa', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+              <span>Scanning and indexing photos... Please wait a moment.</span>
+            </div>
+          )}
+
           <div style={{ fontSize: '11px', color: '#64748b', lineHeight: 1.5, background: '#12141a', padding: '10px', borderRadius: '6px' }}>
             ℹ <strong>Safety Guarantee:</strong> Ai PhotoFlow never alters or overwrites your original wedding files. All AI decisions and edit values are saved non-destructively in local SQLite.
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '8px', marginTop: '4px' }}>
-            <button type="button" onClick={onClose} className="btn btn-secondary">
+            <button type="button" onClick={onClose} disabled={isLoading} className="btn btn-secondary">
               Cancel
             </button>
-            <button type="submit" disabled={isLoading} className="btn btn-primary">
-              {isLoading ? 'Scanning Photos...' : 'Scan & Open Folder'}
+            <button type="submit" disabled={isLoading} className="btn btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              {isLoading ? (
+                <>
+                  <div style={{ width: '12px', height: '12px', border: '2px solid #fff', borderTopColor: 'transparent', borderRadius: '50%', animation: 'spin 1s linear infinite' }} />
+                  <span>Scanning Photos...</span>
+                </>
+              ) : (
+                <span>Scan & Open Folder</span>
+              )}
             </button>
           </div>
         </form>

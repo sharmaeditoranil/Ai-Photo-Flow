@@ -57,8 +57,13 @@ def load_image(filepath: str, max_dim: Optional[int] = None) -> np.ndarray:
                 pil_img = pil_img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
         return np.array(pil_img.convert("RGB"))
     except Exception:
-        # Fallback to OpenCV
-        bgr = cv2.imread(filepath)
+        # Fallback to OpenCV with safe unicode path support for Windows
+        try:
+            raw_bytes = np.fromfile(filepath, dtype=np.uint8)
+            bgr = cv2.imdecode(raw_bytes, cv2.IMREAD_COLOR)
+        except Exception:
+            bgr = cv2.imread(filepath)
+
         if bgr is not None:
             if max_dim:
                 h, w = bgr.shape[:2]
@@ -145,20 +150,36 @@ def apply_edit_pipeline(
 
     # Pre-detect faces on original unedited image where facial contrast is pure and unaltered
     orig_u8 = np.clip(rgb_image, 0, 255).astype(np.uint8)
+    h, w = orig_u8.shape[:2]
     detected_face_boxes = []
     if cached_subject_info and cached_subject_info.get("faces_boxes"):
         detected_face_boxes = cached_subject_info["faces_boxes"]
     else:
         try:
-            f_m = face_detector.detect(orig_u8)
-            if f_m and f_m.bounding_boxes:
-                detected_face_boxes = f_m.bounding_boxes
+            if max(h, w) > 1000:
+                proxy_scale = 800.0 / float(max(h, w))
+                small_u8 = cv2.resize(orig_u8, (int(w * proxy_scale), int(h * proxy_scale)), interpolation=cv2.INTER_AREA)
+                f_m = face_detector.detect(small_u8)
+                if f_m and f_m.bounding_boxes:
+                    inv_scale = 1.0 / proxy_scale
+                    detected_face_boxes = [
+                        {
+                            "x": int(b["x"] * inv_scale),
+                            "y": int(b["y"] * inv_scale),
+                            "w": int(b["w"] * inv_scale),
+                            "h": int(b["h"] * inv_scale)
+                        }
+                        for b in f_m.bounding_boxes
+                    ]
+            else:
+                f_m = face_detector.detect(orig_u8)
+                if f_m and f_m.bounding_boxes:
+                    detected_face_boxes = f_m.bounding_boxes
         except Exception:
             detected_face_boxes = []
 
     # 1. Straighten / Rotate if non-zero
     if abs(params.straighten) > 0.2:
-        h, w = img.shape[:2]
         center = (w / 2.0, h / 2.0)
         rot_mat = cv2.getRotationMatrix2D(center, params.straighten, 1.0)
         img = cv2.warpAffine(img, rot_mat, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
@@ -202,14 +223,20 @@ def apply_edit_pipeline(
         img = np.clip(img, 0.0, 255.0)
 
     # 3.5. Dual-Zone Adaptive Relighting (Luminous Subject & Radiant Background)
-    # 3.5. Dual-Zone Adaptive Relighting (Luminous Subject & Radiant Background)
     subject_info = cached_subject_info or {}
     is_wide_shot = bool(subject_info.get("is_wide_shot", False))
     subject_mask = cached_subject_mask
     try:
         if subject_mask is None:
-            subject_mask, subject_info = subject_engine.generate_subject_mask(rgb_image)
-            is_wide_shot = bool(subject_info.get("is_wide_shot", False))
+            if max(h, w) > 1000:
+                proxy_scale = 800.0 / float(max(h, w))
+                small_proxy = cv2.resize(orig_u8, (int(w * proxy_scale), int(h * proxy_scale)), interpolation=cv2.INTER_AREA)
+                proxy_mask, subject_info = subject_engine.generate_subject_mask(small_proxy)
+                subject_mask = cv2.resize(proxy_mask, (w, h), interpolation=cv2.INTER_LINEAR)
+                is_wide_shot = bool(subject_info.get("is_wide_shot", False))
+            else:
+                subject_mask, subject_info = subject_engine.generate_subject_mask(rgb_image)
+                is_wide_shot = bool(subject_info.get("is_wide_shot", False))
         if subject_info.get("has_subject", False) and subject_mask is not None:
             sub_lum = subject_info.get("subject_lum", 125.0)
             bg_lum = subject_info.get("bg_lum", 100.0)
@@ -681,6 +708,31 @@ def render_preview(filepath: str, params: EditParameters, max_dim: int = 1200) -
     base_rgb = load_image(filepath, max_dim=max_dim)
     return apply_edit_pipeline(base_rgb, params)
 
+def is_default_params(params: Optional[EditParameters]) -> bool:
+    """Checks whether photo edit parameters are untouched defaults."""
+    if not params:
+        return True
+    try:
+        return (
+            abs(getattr(params, 'exposure', 0.0) or 0.0) < 0.01 and
+            abs(getattr(params, 'temperature', 0.0) or 0.0) < 0.1 and
+            abs(getattr(params, 'tint', 0.0) or 0.0) < 0.1 and
+            abs(getattr(params, 'contrast', 0.0) or 0.0) < 0.1 and
+            abs(getattr(params, 'highlights', 0.0) or 0.0) < 0.1 and
+            abs(getattr(params, 'shadows', 0.0) or 0.0) < 0.1 and
+            abs(getattr(params, 'whites', 0.0) or 0.0) < 0.1 and
+            abs(getattr(params, 'blacks', 0.0) or 0.0) < 0.1 and
+            abs(getattr(params, 'vibrance', 0.0) or 0.0) < 0.1 and
+            abs(getattr(params, 'saturation', 0.0) or 0.0) < 0.1 and
+            abs(getattr(params, 'straighten', 0.0) or 0.0) < 0.1 and
+            float(getattr(params, 'skin_smoothing', 0.0) or 0.0) < 1.0 and
+            float(getattr(params, 'auto_blemish', 0.0) or 0.0) < 1.0 and
+            float(getattr(params, 'dodge_burn', 0.0) or 0.0) < 1.0 and
+            len(getattr(params, 'heal_spots', []) or []) == 0
+        )
+    except Exception:
+        return False
+
 def export_photo(
     source_path: str,
     target_path: str,
@@ -691,10 +743,28 @@ def export_photo(
     """
     Renders full-resolution or specified resolution adjusted photo and writes to disk.
     Preserves directories and never overwrites originals.
+    Accelerated with hardware SIMD JPEG compression and zero-overhead pass-through for unedited images.
     """
     os.makedirs(os.path.dirname(target_path), exist_ok=True)
+
+    # 1. Ultra-fast pass-through for unedited photos
+    if is_default_params(params):
+        src_ext = os.path.splitext(source_path)[1].lower()
+        if max_resolution is None and src_ext in ('.jpg', '.jpeg'):
+            import shutil
+            shutil.copy2(source_path, target_path)
+            return
+
+        # Direct resize without filter chain
+        full_rgb = load_image(source_path, max_dim=max_resolution)
+        bgr = cv2.cvtColor(full_rgb, cv2.COLOR_RGB2BGR)
+        cv2.imwrite(target_path, bgr, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+        return
+
+    # 2. Photos with edits: apply accelerated pipeline
     full_rgb = load_image(source_path, max_dim=max_resolution)
     edited_rgb = apply_edit_pipeline(full_rgb, params)
 
-    pil_out = Image.fromarray(edited_rgb)
-    pil_out.save(target_path, format="JPEG", quality=jpeg_quality, optimize=False)
+    # Hardware-accelerated SIMD JPEG write
+    bgr = cv2.cvtColor(edited_rgb, cv2.COLOR_RGB2BGR)
+    cv2.imwrite(target_path, bgr, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])

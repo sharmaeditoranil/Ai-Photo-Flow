@@ -19,7 +19,20 @@ from backend.core.editing_model import IndianWeddingEditingModel
 from backend.core.scene_model import SceneConsistencyEngine
 from backend.core.interfaces import DuplicateGroupResult, QualityMetrics, FaceMetrics
 
-SUPPORTED_EXTENSIONS = {'.jpg', '.jpeg', '.png', '.arw', '.cr2', '.cr3', '.nef', '.dng'}
+SUPPORTED_EXTENSIONS = {
+    '.jpg', '.jpeg', '.jpe', '.jfif',
+    '.png',
+    '.arw', '.srf', '.sr2',
+    '.cr2', '.cr3', '.crw',
+    '.nef', '.nrw',
+    '.dng',
+    '.raf',
+    '.raw', '.rw2',
+    '.orf', '.ori',
+    '.pef', '.ptx',
+    '.tif', '.tiff',
+    '.webp'
+}
 
 class CullingService:
     def __init__(self):
@@ -52,56 +65,85 @@ class CullingService:
         Scans all photos in the folder without modifying original files.
         Registers them in SQLite database.
         """
-        folder_path = os.path.normpath(os.path.abspath(folder_path.strip().strip('"').strip("'")))
+        folder_path = folder_path.strip().strip('"').strip("'")
+        folder_path = os.path.expanduser(folder_path)
+        folder_path = os.path.normpath(os.path.abspath(folder_path))
+
+        print(f"[Photo Import] Scanning folder: '{folder_path}' for project: '{project_name}'")
+
         if not os.path.exists(folder_path):
-            raise FileNotFoundError(f"Folder path does not exist: {folder_path}")
+            raise FileNotFoundError(f"Folder path does not exist on disk: {folder_path}")
 
         conn = get_connection()
         cursor = conn.cursor()
 
-        # Check or create project
-        cursor.execute("SELECT id, name, total_photos, status FROM projects WHERE folder_path = ?", (folder_path,))
+        # Check or create project (case-insensitive path comparison for Windows & macOS compatibility)
+        cursor.execute("SELECT id, name, total_photos, status FROM projects WHERE folder_path = ? OR LOWER(folder_path) = LOWER(?)", (folder_path, folder_path))
         existing = cursor.fetchone()
 
         if existing:
             project_id = existing["id"]
-            cursor.execute("UPDATE projects SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (project_name, project_id))
+            cursor.execute("UPDATE projects SET name = ?, folder_path = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?", (project_name, folder_path, project_id))
         else:
             cursor.execute("INSERT INTO projects (name, folder_path, status) VALUES (?, ?, 'READY')", (project_name, folder_path))
             project_id = cursor.lastrowid
 
-        # Scan folder for supported images
+        # Scan folder recursively for all supported photo formats
         photo_files = []
+        scanned_count = 0
         for root, _, files in os.walk(folder_path):
             for file in sorted(files):
-                if file.startswith('.'):
+                scanned_count += 1
+                if file.startswith('.') or file.startswith('~$'):
                     continue
                 ext = os.path.splitext(file)[1].lower()
                 if ext in SUPPORTED_EXTENSIONS:
-                    photo_files.append(os.path.join(root, file))
+                    full_p = os.path.join(root, file)
+                    photo_files.append(full_p)
+
+        print(f"[Photo Import] Found {len(photo_files)} supported photos out of {scanned_count} total scanned files in '{folder_path}'")
 
         if len(photo_files) == 0:
             conn.close()
-            raise ValueError(f"No supported wedding photos (.jpg, .png, .arw, .cr2, .cr3, .nef, .dng) found in '{folder_path}'. Please choose a folder containing photos.")
+            raise ValueError(
+                f"No supported wedding photos found in '{folder_path}'. "
+                f"Supported formats include: JPG, JPEG, PNG, ARW, CR2, CR3, NEF, DNG, RAF, TIFF, WEBP. "
+                f"(Scanned {scanned_count} files in directory)."
+            )
 
-        # Insert photos
+        # Insert photos into project with per-item fault tolerance
         inserted_count = 0
         for fpath in photo_files:
             filename = os.path.basename(fpath)
-            file_size = os.path.getsize(fpath)
+            try:
+                file_size = os.path.getsize(fpath)
+            except Exception:
+                file_size = 0
+
             file_format = os.path.splitext(filename)[1].upper().replace('.', '')
             meta = self.extract_exif(fpath)
 
-            cursor.execute("""
-            INSERT OR IGNORE INTO photos (
-                project_id, filename, file_path, file_size, width, height, file_format, exif_date
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                project_id, filename, fpath, file_size,
-                meta.get("width", 0), meta.get("height", 0), file_format, meta.get("exif_date", "")
-            ))
-            if cursor.rowcount > 0:
-                inserted_count += 1
+            try:
+                cursor.execute("""
+                SELECT id FROM photos WHERE project_id = ? AND (file_path = ? OR filename = ?)
+                """, (project_id, fpath, filename))
+                p_exist = cursor.fetchone()
+
+                if not p_exist:
+                    cursor.execute("""
+                    INSERT INTO photos (
+                        project_id, filename, file_path, file_size, width, height, file_format, exif_date
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (
+                        project_id, filename, fpath, file_size,
+                        meta.get("width", 0), meta.get("height", 0), file_format, meta.get("exif_date", "")
+                    ))
+                    inserted_count += 1
+                else:
+                    # Refresh file path and size if needed
+                    cursor.execute("UPDATE photos SET file_path = ?, file_size = ? WHERE id = ?", (fpath, file_size, p_exist["id"]))
+            except Exception as insert_err:
+                print(f"[Photo Import Warning] Skipping photo {filename}: {insert_err}")
 
         # Update total count
         cursor.execute("SELECT COUNT(*) as total FROM photos WHERE project_id = ?", (project_id,))
@@ -110,6 +152,8 @@ class CullingService:
 
         conn.commit()
         conn.close()
+
+        print(f"[Photo Import Success] Project {project_id} ('{project_name}') has {total_photos} photos ({inserted_count} newly added).")
 
         return {
             "project_id": project_id,

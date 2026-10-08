@@ -241,7 +241,10 @@ def get_photoshop_status():
 @app.post("/api/projects/import")
 def import_project(req: ImportFolderRequest):
     raw_path = req.folder_path.strip().strip('"').strip("'")
-    folder = os.path.normpath(os.path.abspath(raw_path))
+    folder = os.path.normpath(os.path.abspath(os.path.expanduser(raw_path)))
+
+    print(f"[API] /api/projects/import requested for: '{folder}'")
+
     if not os.path.exists(folder):
         raise HTTPException(status_code=400, detail=f"Directory '{folder}' does not exist on disk.")
 
@@ -251,6 +254,7 @@ def import_project(req: ImportFolderRequest):
         result = culling_service.scan_folder(folder, proj_name)
         return result
     except Exception as e:
+        print(f"[API Error] /api/projects/import failed: {e}")
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/api/projects")

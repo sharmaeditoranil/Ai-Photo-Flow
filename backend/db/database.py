@@ -28,7 +28,7 @@ def init_db():
     CREATE TABLE IF NOT EXISTS projects (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
-        folder_path TEXT NOT NULL UNIQUE,
+        folder_path TEXT NOT NULL,
         total_photos INTEGER DEFAULT 0,
         status TEXT DEFAULT 'READY',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -42,7 +42,7 @@ def init_db():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
         filename TEXT NOT NULL,
-        file_path TEXT NOT NULL UNIQUE,
+        file_path TEXT NOT NULL,
         file_size INTEGER DEFAULT 0,
         width INTEGER DEFAULT 0,
         height INTEGER DEFAULT 0,
@@ -69,6 +69,11 @@ def init_db():
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
+
+    # Performance indices
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_photos_project_id ON photos(project_id)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_photos_proj_file ON photos(project_id, file_path)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_projects_folder ON projects(folder_path)")
 
     # Batch Jobs
     cursor.execute("""
