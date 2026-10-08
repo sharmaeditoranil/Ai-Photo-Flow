@@ -65,6 +65,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     straighten: 0,
     preset_name: 'Pure Light (No Color Tone)',
     auto_blemish: 0,
+    heal_opacity: 100,
+    heal_face_preset: 'AUTO',
     skin_smoothing: 0,
     dodge_burn: 0,
     heal_spots: []
@@ -76,6 +78,11 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   };
 
   const handleSliderChange = (key: keyof EditParameters, value: number) => {
+    const updated = { ...edits, [key]: value };
+    onUpdateEdits(photo.id, updated);
+  };
+
+  const handleParamChange = (key: keyof EditParameters, value: any) => {
     const updated = { ...edits, [key]: value };
     onUpdateEdits(photo.id, updated);
   };
@@ -625,11 +632,11 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           </span>
         </div>
 
-        {/* Auto Blemish Slider */}
-        <div className="slider-group" style={{ marginBottom: '12px' }}>
+        {/* AI Heal: Blemish Detection Sensitivity Slider */}
+        <div className="slider-group" style={{ marginBottom: '10px' }}>
           <div className="slider-header">
             <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-              <span>AI Auto Blemish Heal</span>
+              <span style={{ fontWeight: 600, color: '#e2e8f0' }}>AI Heal (Detection Strength)</span>
               <span style={{ fontSize: '10px', color: '#64748b' }}>(पिंपल रिमूवल)</span>
             </span>
             <span className="slider-val" style={{ color: (edits.auto_blemish ?? 0) > 0 ? '#34d399' : '#94a3b8' }}>
@@ -673,10 +680,79 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               </button>
             ))}
           </div>
-          <div style={{ fontSize: '9.5px', color: '#64748b', marginTop: '4px', lineHeight: '1.3' }}>
-            Detects acne, pimples & marks, blending naturally while protecting eyes, lips & jewelry.
-          </div>
         </div>
+
+        {/* AI Heal: Non-destructive Opacity Blend Slider (Only visible when active) */}
+        {(edits.auto_blemish ?? 0) > 0 && (
+          <div className="slider-group" style={{ marginBottom: '10px', background: 'rgba(15, 23, 42, 0.4)', padding: '6px 8px', borderRadius: '6px', border: '1px solid #1e293b' }}>
+            <div className="slider-header">
+              <span style={{ fontSize: '11px', color: '#cbd5e1', fontWeight: 500 }}>
+                Heal Layer Opacity (Blend)
+              </span>
+              <span className="slider-val" style={{ color: '#38bdf8' }}>
+                {Math.round(edits.heal_opacity ?? 100)}%
+              </span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="100"
+              step="5"
+              value={edits.heal_opacity ?? 100}
+              onChange={(e) => handleSliderChange('heal_opacity' as any, parseFloat(e.target.value))}
+              style={{ accentColor: '#38bdf8' }}
+            />
+            <div style={{ fontSize: '9px', color: '#64748b', marginTop: '2px' }}>
+              Non-destructive: blends healed layer with original portrait in real time.
+            </div>
+          </div>
+        )}
+
+        {/* AI Heal: Face Scale Presets */}
+        {(edits.auto_blemish ?? 0) > 0 && (
+          <div style={{ marginBottom: '12px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
+              <span style={{ fontSize: '10.5px', color: '#94a3b8', fontWeight: 500 }}>
+                Face Scale Normalization:
+              </span>
+              <span style={{ fontSize: '9px', color: (edits.heal_face_preset || 'AUTO') === 'AUTO' ? '#34d399' : '#38bdf8', fontWeight: 600 }}>
+                {(edits.heal_face_preset || 'AUTO') === 'AUTO' ? 'Auto-Detected' : (edits.heal_face_preset || 'AUTO')}
+              </span>
+            </div>
+            <div style={{ display: 'flex', gap: '4px' }}>
+              {[
+                { id: 'AUTO', label: 'Auto Scale' },
+                { id: 'SMALL', label: 'Small Face' },
+                { id: 'MEDIUM', label: 'Medium' },
+                { id: 'LARGE', label: 'Large (Close-up)' },
+              ].map(preset => {
+                const isSelected = (edits.heal_face_preset || 'AUTO') === preset.id;
+                return (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    onClick={() => handleParamChange('heal_face_preset', preset.id)}
+                    style={{
+                      flex: 1,
+                      padding: '3px 0',
+                      fontSize: '9px',
+                      borderRadius: '4px',
+                      border: isSelected ? '1px solid #38bdf8' : '1px solid #232836',
+                      background: isSelected ? 'rgba(56, 189, 248, 0.2)' : '#181b22',
+                      color: isSelected ? '#38bdf8' : '#94a3b8',
+                      cursor: 'pointer'
+                    }}
+                  >
+                    {preset.label}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ fontSize: '9px', color: '#64748b', marginTop: '4px', lineHeight: '1.3' }}>
+              Scale-invariant blemish removal: maintains natural pores and leaves eyes, lips & jewelry untouched.
+            </div>
+          </div>
+        )}
 
         {/* SkinFiner-Style Skin Smoothing Slider */}
         <div className="slider-group" style={{ marginBottom: '12px', paddingTop: '8px', borderTop: '1px dashed #232836' }}>

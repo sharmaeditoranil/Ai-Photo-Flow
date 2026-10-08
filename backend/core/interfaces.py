@@ -52,6 +52,8 @@ class EditParameters:
     straighten: float = 0.0    # -15 to +15 degrees
     preset_name: str = "Natural Wedding"
     auto_blemish: float = 0.0  # 0 to 100 (AI blemish/pimple removal)
+    heal_opacity: float = 100.0 # 0 to 100 (AI Heal layer opacity blend)
+    heal_face_preset: str = "AUTO" # "AUTO", "SMALL", "MEDIUM", "LARGE"
     skin_smoothing: float = 0.0 # 0 to 100 (SkinFiner-style texture-preserving facial skin smoothing)
     dodge_burn: float = 0.0    # 0 to 100 (Subtle 3D portrait sculpting: soft highlights & contours)
     heal_spots: List[Dict[str, float]] = field(default_factory=list) # [{'x': 0.5, 'y': 0.4, 'radius': 0.015}]
@@ -73,6 +75,8 @@ class EditParameters:
             "straighten": self.straighten,
             "preset_name": self.preset_name,
             "auto_blemish": self.auto_blemish,
+            "heal_opacity": self.heal_opacity,
+            "heal_face_preset": self.heal_face_preset,
             "skin_smoothing": self.skin_smoothing,
             "dodge_burn": self.dodge_burn,
             "heal_spots": self.heal_spots
@@ -96,6 +100,8 @@ class EditParameters:
             straighten=float(data.get("straighten", 0.0)),
             preset_name=str(data.get("preset_name", "Natural Wedding")),
             auto_blemish=float(data.get("auto_blemish", 0.0)),
+            heal_opacity=float(data.get("heal_opacity", 100.0)),
+            heal_face_preset=str(data.get("heal_face_preset", "AUTO")),
             skin_smoothing=float(data.get("skin_smoothing", 0.0)),
             dodge_burn=float(data.get("dodge_burn", 0.0)),
             heal_spots=list(data.get("heal_spots", []))

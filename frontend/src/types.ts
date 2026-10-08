@@ -25,6 +25,8 @@ export interface EditParameters {
   straighten: number;
   preset_name: string;
   auto_blemish?: number;
+  heal_opacity?: number;
+  heal_face_preset?: 'AUTO' | 'SMALL' | 'MEDIUM' | 'LARGE';
   skin_smoothing?: number;
   dodge_burn?: number;
   heal_spots?: HealSpot[];

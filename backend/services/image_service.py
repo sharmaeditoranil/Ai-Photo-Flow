@@ -485,162 +485,43 @@ def apply_edit_pipeline(
         except Exception:
             pass
 
-    # 6. Retouch4me-Style AI Facial Blemish Healing & Manual Spot Brush (Ultra-Fast Localized Pipeline)
+    # 6. Commercial-Grade AI Heal: Scale-Normalized Face Blemish & Spot Removal (Non-Destructive)
     heal_spots = getattr(params, 'heal_spots', []) or []
     auto_blemish = float(getattr(params, 'auto_blemish', 0.0) or 0.0)
+    heal_opacity = float(getattr(params, 'heal_opacity', 100.0) or 100.0)
+    heal_face_preset = str(getattr(params, 'heal_face_preset', 'AUTO') or 'AUTO')
 
     if (heal_spots and len(heal_spots) > 0) or auto_blemish > 1.0:
         try:
-            h, w = img.shape[:2]
+            from backend.heal.pipeline import AIHealPipeline
+            f_boxes = detected_face_boxes
+            if not f_boxes and face_detector is not None:
+                h_cur, w_cur = img.shape[:2]
+                proxy_s = 800.0 / float(max(h_cur, w_cur)) if max(h_cur, w_cur) > 1000 else 1.0
+                proxy_u8 = cv2.resize(np.clip(img, 0, 255).astype(np.uint8), (int(w_cur * proxy_s), int(h_cur * proxy_s)), interpolation=cv2.INTER_AREA) if proxy_s < 1.0 else np.clip(img, 0, 255).astype(np.uint8)
+                f_m = face_detector.detect(proxy_u8)
+                if f_m and f_m.bounding_boxes:
+                    inv_s = 1.0 / proxy_s
+                    f_boxes = [
+                        {
+                            "x": int(b["x"] * inv_s),
+                            "y": int(b["y"] * inv_s),
+                            "w": int(b["w"] * inv_s),
+                            "h": int(b["h"] * inv_s)
+                        }
+                        for b in f_m.bounding_boxes
+                    ]
 
-            # A. Manual Spot Healing Brush (Ultra-Fast Local Patch Inpainting)
-            if heal_spots and len(heal_spots) > 0:
-                for spot in heal_spots:
-                    try:
-                        cx = int(np.clip(float(spot.get("x", 0.5)) * w, 0, w - 1))
-                        cy = int(np.clip(float(spot.get("y", 0.5)) * h, 0, h - 1))
-                        rad = max(3, int(float(spot.get("radius", 0.010)) * min(h, w)))
-                        pad = rad * 3
-                        sx1, sy1 = max(0, cx - pad), max(0, cy - pad)
-                        sx2, sy2 = min(w, cx + pad), min(h, cy + pad)
-                        if sx2 > sx1 and sy2 > sy1:
-                            patch = np.clip(img[sy1:sy2, sx1:sx2], 0, 255).astype(np.uint8)
-                            patch_mask = np.zeros((sy2 - sy1, sx2 - sx1), dtype=np.uint8)
-                            cv2.circle(patch_mask, (cx - sx1, cy - sy1), rad, 255, -1)
-                            patch_inpainted = cv2.inpaint(patch, patch_mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
-                            img[sy1:sy2, sx1:sx2] = patch_inpainted.astype(np.float32)
-                    except Exception:
-                        pass
-
-            # B. Retouch4me-Style Multi-Scale AI Face Blemish Auto-Clean (Localized to Face Crops)
-            if auto_blemish > 1.0:
-                try:
-                    f_boxes = detected_face_boxes
-                    if not f_boxes and face_detector is not None:
-                        # Fast proxy face detect if not already available
-                        proxy_s = 800.0 / float(max(h, w)) if max(h, w) > 1000 else 1.0
-                        proxy_u8 = cv2.resize(np.clip(img, 0, 255).astype(np.uint8), (int(w * proxy_s), int(h * proxy_s)), interpolation=cv2.INTER_AREA) if proxy_s < 1.0 else np.clip(img, 0, 255).astype(np.uint8)
-                        f_m = face_detector.detect(proxy_u8)
-                        if f_m and f_m.bounding_boxes:
-                            inv_s = 1.0 / proxy_s
-                            f_boxes = [
-                                {
-                                    "x": int(b["x"] * inv_s),
-                                    "y": int(b["y"] * inv_s),
-                                    "w": int(b["w"] * inv_s),
-                                    "h": int(b["h"] * inv_s)
-                                }
-                                for b in f_m.bounding_boxes
-                            ]
-
-                    if f_boxes:
-                        sens = np.clip(auto_blemish / 100.0, 0.1, 1.0)
-                        th_cr = max(3.5, 7.0 - sens * 3.5)
-                        th_rg = max(4.0, 8.0 - sens * 4.0)
-                        th_y = max(4.5, 8.5 - sens * 4.0)
-
-                        k_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
-                        k_mid = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (23, 23))
-                        k_large = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (35, 35))
-
-                        for fb in f_boxes:
-                            fx, fy, fw, fh = fb['x'], fb['y'], fb['w'], fb['h']
-                            pad_x, pad_y = int(fw * 0.08), int(fh * 0.08)
-                            x1, y1 = max(0, fx - pad_x), max(0, fy - pad_y)
-                            x2, y2 = min(w, fx + fw + pad_x), min(h, fy + fh + pad_y)
-                            face_crop = np.clip(img[y1:y2, x1:x2], 0, 255).astype(np.uint8)
-                            ch, cw = face_crop.shape[:2]
-                            if ch < 12 or cw < 12:
-                                continue
-
-                            ycrcb_c = cv2.cvtColor(face_crop, cv2.COLOR_RGB2YCrCb)
-                            Y_c = ycrcb_c[:, :, 0]
-                            Cr_c = ycrcb_c[:, :, 1]
-                            Cb_c = ycrcb_c[:, :, 2]
-                            gray_c = cv2.cvtColor(face_crop, cv2.COLOR_RGB2GRAY)
-                            edge_mag_c = cv2.magnitude(cv2.Sobel(gray_c, cv2.CV_32F, 1, 0), cv2.Sobel(gray_c, cv2.CV_32F, 0, 1))
-
-                            r_ch = face_crop[:, :, 0].astype(np.int16)
-                            g_ch = face_crop[:, :, 1].astype(np.int16)
-                            b_ch = face_crop[:, :, 2].astype(np.int16)
-                            redness_c = np.clip(r_ch - ((g_ch + b_ch) // 2) + 128, 0, 255).astype(np.uint8)
-
-                            if max(ch, cw) > 400:
-                                s_scale = 400.0 / float(max(ch, cw))
-                                sw, sh = max(1, int(cw * s_scale)), max(1, int(ch * s_scale))
-                                Cr_s = cv2.resize(Cr_c, (sw, sh), interpolation=cv2.INTER_AREA)
-                                red_s = cv2.resize(redness_c, (sw, sh), interpolation=cv2.INTER_AREA)
-                                Y_s = cv2.resize(Y_c, (sw, sh), interpolation=cv2.INTER_AREA)
-
-                                ks = max(3, int(13 * s_scale) | 1)
-                                kl = max(7, int(31 * s_scale) | 1)
-                                k_s_el = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ks, ks))
-                                k_l_el = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kl, kl))
-
-                                top_cr_s = np.maximum(cv2.morphologyEx(Cr_s, cv2.MORPH_TOPHAT, k_s_el), cv2.morphologyEx(Cr_s, cv2.MORPH_TOPHAT, k_l_el))
-                                top_rg_s = np.maximum(cv2.morphologyEx(red_s, cv2.MORPH_TOPHAT, k_s_el), cv2.morphologyEx(red_s, cv2.MORPH_TOPHAT, k_l_el))
-                                blk_y_s = np.maximum(cv2.morphologyEx(Y_s, cv2.MORPH_BLACKHAT, k_s_el), cv2.morphologyEx(Y_s, cv2.MORPH_BLACKHAT, k_l_el))
-
-                                tophat_cr = cv2.resize(top_cr_s, (cw, ch), interpolation=cv2.INTER_LINEAR)
-                                tophat_rg = cv2.resize(top_rg_s, (cw, ch), interpolation=cv2.INTER_LINEAR)
-                                blackhat_y = cv2.resize(blk_y_s, (cw, ch), interpolation=cv2.INTER_LINEAR)
-                            else:
-                                tophat_cr = np.maximum(cv2.morphologyEx(Cr_c, cv2.MORPH_TOPHAT, k_small), cv2.morphologyEx(Cr_c, cv2.MORPH_TOPHAT, k_large))
-                                tophat_rg = np.maximum(cv2.morphologyEx(redness_c, cv2.MORPH_TOPHAT, k_small), cv2.morphologyEx(redness_c, cv2.MORPH_TOPHAT, k_large))
-                                blackhat_y = np.maximum(cv2.morphologyEx(Y_c, cv2.MORPH_BLACKHAT, k_small), cv2.morphologyEx(Y_c, cv2.MORPH_BLACKHAT, k_large))
-
-                            face_mask_c = np.zeros((ch, cw), dtype=np.uint8)
-                            fcx, fcy = int((fx - x1) + fw * 0.5), int((fy - y1) + fh * 0.52)
-                            cv2.ellipse(face_mask_c, (fcx, fcy), (int(fw * 0.44), int(fh * 0.46)), 0, 0, 360, 255, -1)
-
-                            # Strict feature protection zones
-                            nose_x1, nose_x2 = max(0, int(fcx - fw * 0.13)), min(cw, int(fcx + fw * 0.13))
-                            nose_y1, nose_y2 = max(0, int((fy - y1) + fh * 0.38)), min(ch, int((fy - y1) + fh * 0.72))
-                            face_mask_c[nose_y1:nose_y2, nose_x1:nose_x2] = 0
-
-                            eye_x1, eye_x2 = max(0, int(fcx - fw * 0.38)), min(cw, int(fcx + fw * 0.38))
-                            eye_y1, eye_y2 = max(0, int((fy - y1) + fh * 0.15)), min(ch, int((fy - y1) + fh * 0.45))
-                            face_mask_c[eye_y1:eye_y2, eye_x1:eye_x2] = 0
-
-                            mouth_x1, mouth_x2 = max(0, int(fcx - fw * 0.28)), min(cw, int(fcx + fw * 0.28))
-                            mouth_y1, mouth_y2 = max(0, int((fy - y1) + fh * 0.68)), min(ch, int((fy - y1) + fh * 0.90))
-                            face_mask_c[mouth_y1:mouth_y2, mouth_x1:mouth_x2] = 0
-
-                            tikka_x1, tikka_x2 = max(0, int(fcx - fw * 0.08)), min(cw, int(fcx + fw * 0.08))
-                            tikka_y1, tikka_y2 = max(0, int(fy - y1)), min(ch, int((fy - y1) + fh * 0.26))
-                            face_mask_c[tikka_y1:tikka_y2, tikka_x1:tikka_x2] = 0
-
-                            safe_skin = (face_mask_c > 0) & (Cr_c >= 122) & (Cr_c <= 218) & (Cb_c >= 70) & (Cb_c <= 140) & (Y_c >= 72) & (Y_c <= 250) & (edge_mag_c < 42.0)
-                            cand = safe_skin & ((tophat_cr > th_cr) | (tophat_rg > th_rg) | (blackhat_y > th_y))
-
-                            max_diam = min(28, max(10, int(fw * 0.07)))
-                            max_area = int(1.4 * np.pi * (max_diam / 2.0) ** 2)
-                            min_diam = max(3, int(fw * 0.003))
-                            min_area = max(5, int(np.pi * (min_diam / 2.0) ** 2))
-
-                            num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(cand.astype(np.uint8) * 255)
-                            crop_heal_mask = np.zeros((ch, cw), dtype=np.uint8)
-                            for i in range(1, num_labels):
-                                area = stats[i, cv2.CC_STAT_AREA]
-                                cw_box = stats[i, cv2.CC_STAT_WIDTH]
-                                ch_box = stats[i, cv2.CC_STAT_HEIGHT]
-                                aspect = max(cw_box, ch_box) / max(1, min(cw_box, ch_box))
-                                pimple_size = max(cw_box, ch_box)
-                                if min_area <= area <= max_area and pimple_size <= max_diam and aspect < 2.0:
-                                    crop_heal_mask[labels == i] = 255
-
-                            if np.any(crop_heal_mask > 0):
-                                kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-                                dilated_mask = cv2.dilate(crop_heal_mask, kernel_dilate, iterations=1)
-                                base_blurred = cv2.GaussianBlur(face_crop, (5, 5), 1.2)
-                                skin_texture = face_crop.astype(np.float32) - base_blurred.astype(np.float32)
-                                inpainted_base = cv2.inpaint(face_crop, dilated_mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
-                                healed_textured = np.clip(inpainted_base.astype(np.float32) + skin_texture * 0.75, 0, 255).astype(np.uint8)
-                                feather_mask = cv2.GaussianBlur(dilated_mask.astype(np.float32) / 255.0, (5, 5), 1.2)[:, :, np.newaxis]
-                                blended = face_crop.astype(np.float32) * (1.0 - feather_mask) + healed_textured.astype(np.float32) * feather_mask
-                                img[y1:y2, x1:x2] = blended
-                except Exception:
-                    pass
+            heal_pipeline = AIHealPipeline(face_model=face_detector)
+            heal_result = heal_pipeline.process_image(
+                img,
+                strength=auto_blemish,
+                opacity=heal_opacity,
+                face_preset=heal_face_preset,
+                manual_spots=heal_spots,
+                precomputed_face_boxes=f_boxes
+            )
+            img = heal_result.blended_rgb.astype(np.float32)
         except Exception:
             pass
 
