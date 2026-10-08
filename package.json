@@ -42,6 +42,10 @@
         {
           "from": "dist-backend-win",
           "to": "photoflow-backend-win"
+        },
+        {
+          "from": "sample_wedding_photos",
+          "to": "sample_wedding_photos"
         }
       ]
     },
@@ -63,6 +67,10 @@
         {
           "from": "dist-backend/photoflow-backend",
           "to": "photoflow-backend"
+        },
+        {
+          "from": "sample_wedding_photos",
+          "to": "sample_wedding_photos"
         }
       ]
     },

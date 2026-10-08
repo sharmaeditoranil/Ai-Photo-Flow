@@ -4,7 +4,7 @@ const API_BASE = (typeof window !== 'undefined' && window.location.protocol === 
   ? 'http://127.0.0.1:8000/api'
   : '/api';
 
-async function fetchWithRetry(url: string, options?: RequestInit, retries = 4, delayMs = 800): Promise<Response> {
+async function fetchWithRetry(url: string, options?: RequestInit, retries = 6, delayMs = 900): Promise<Response> {
   let lastError: any = null;
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {

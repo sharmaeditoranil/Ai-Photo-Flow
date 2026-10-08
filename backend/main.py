@@ -239,13 +239,18 @@ def get_photoshop_status():
 # --- Project Endpoints ---
 @app.post("/api/projects/import")
 def import_project(req: ImportFolderRequest):
-    folder = os.path.abspath(req.folder_path.strip())
+    raw_path = req.folder_path.strip().strip('"').strip("'")
+    folder = os.path.normpath(os.path.abspath(raw_path))
     if not os.path.exists(folder):
         raise HTTPException(status_code=400, detail=f"Directory '{folder}' does not exist on disk.")
 
-    proj_name = req.project_name.strip() if req.project_name else f"Wedding – {os.path.basename(folder)}"
-    result = culling_service.scan_folder(folder, proj_name)
-    return result
+    folder_name = os.path.basename(folder) or "Wedding_Shoot"
+    proj_name = req.project_name.strip() if req.project_name else f"Wedding – {folder_name}"
+    try:
+        result = culling_service.scan_folder(folder, proj_name)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.get("/api/projects")
 def list_projects():

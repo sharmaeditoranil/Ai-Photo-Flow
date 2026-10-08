@@ -52,6 +52,7 @@ class CullingService:
         Scans all photos in the folder without modifying original files.
         Registers them in SQLite database.
         """
+        folder_path = os.path.normpath(os.path.abspath(folder_path.strip().strip('"').strip("'")))
         if not os.path.exists(folder_path):
             raise FileNotFoundError(f"Folder path does not exist: {folder_path}")
 
@@ -78,6 +79,10 @@ class CullingService:
                 ext = os.path.splitext(file)[1].lower()
                 if ext in SUPPORTED_EXTENSIONS:
                     photo_files.append(os.path.join(root, file))
+
+        if len(photo_files) == 0:
+            conn.close()
+            raise ValueError(f"No supported wedding photos (.jpg, .png, .arw, .cr2, .cr3, .nef, .dng) found in '{folder_path}'. Please choose a folder containing photos.")
 
         # Insert photos
         inserted_count = 0

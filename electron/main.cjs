@@ -98,10 +98,15 @@ function startPythonBackend() {
     logStream.write(`\n--- [${new Date().toISOString()}] Launching Backend: ${pythonBin} ---\n`);
   } catch (e) {}
 
+  const extraPath = isWin
+    ? `${path.join(cwd, 'python')};${path.join(cwd, 'python', 'Lib', 'site-packages', 'numpy.libs')};${path.join(cwd, 'python', 'Lib', 'site-packages')};${process.env.PATH || ''}`
+    : (process.env.PATH || '');
+
   try {
     pythonProcess = spawn(pythonBin, pythonArgs, {
       cwd: cwd,
-      env: { ...process.env, PYTHONPATH: cwd }
+      env: { ...process.env, PYTHONPATH: cwd, PATH: extraPath },
+      windowsHide: true
     });
 
     pythonProcess.stdout.on('data', (data) => {
@@ -158,6 +163,19 @@ function createWindow() {
       return null;
     }
     return result.filePaths[0];
+  });
+
+  // Sample photos folder IPC for zero-friction testing on both Windows & Mac
+  ipcMain.handle('app:getSamplePhotosPath', () => {
+    if (app.isPackaged) {
+      const p1 = path.join(process.resourcesPath, 'sample_wedding_photos');
+      if (fs.existsSync(p1)) return p1;
+      const p2 = path.join(process.resourcesPath, 'photoflow-backend-win', 'sample_wedding_photos');
+      if (fs.existsSync(p2)) return p2;
+    }
+    const devPath = path.join(__dirname, '..', 'sample_wedding_photos');
+    if (fs.existsSync(devPath)) return devPath;
+    return null;
   });
 
   mainWindow.webContents.on('console-message', (e, level, message, line, sourceId) => {

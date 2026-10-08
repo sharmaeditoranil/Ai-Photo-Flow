@@ -37,8 +37,21 @@ export const ImportModal: React.FC<ImportModalProps> = ({
     }
   };
 
-  const handleLoadSample = () => {
-    // Current workspace sample wedding folder
+  const handleLoadSample = async () => {
+    try {
+      if ((window as any).electronAPI?.getSamplePhotosPath) {
+        const sample = await (window as any).electronAPI.getSamplePhotosPath();
+        if (sample) {
+          setFolderPath(sample);
+          setProjectName('Wedding – Rahul & Priya (Sample Dataset)');
+          return;
+        }
+      }
+    } catch (e) {
+      console.error(e);
+    }
+
+    // Fallback if running outside electron or path not found
     const samplePath = (window as any).electronAPI?.platform === 'win32'
       ? 'C:\\sample_wedding_photos'
       : '/Users/anilsharma/Documents/Anil Sharma Final Website Meterial/Ai PhotoFlow /sample_wedding_photos';
