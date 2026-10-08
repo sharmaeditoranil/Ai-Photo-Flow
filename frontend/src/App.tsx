@@ -58,9 +58,6 @@ export const App: React.FC = () => {
   const [isAdminHubOpen, setIsAdminHubOpen] = useState<boolean>(false);
   const [selectedStylePreset, setSelectedStylePreset] = useState<string>('Pure Light (No Color Tone)');
 
-  // Spot Healing Brush State
-  const [healBrushActive, setHealBrushActive] = useState<boolean>(false);
-  const [healBrushRadius, setHealBrushRadius] = useState<number>(0.010);
 
 
   // License & Pricing State
@@ -520,10 +517,6 @@ export const App: React.FC = () => {
               onResetEdits={handleResetEdits}
               onAutoEditSingle={handleAutoEditSingle}
               onUpdateEdits={handleUpdateEdits}
-              healBrushActive={healBrushActive}
-              onToggleHealBrush={setHealBrushActive}
-              healBrushRadius={healBrushRadius}
-              onChangeHealBrushRadius={setHealBrushRadius}
             />
           ) : viewMode === 'compare' ? (
             <CompareView
@@ -544,15 +537,6 @@ export const App: React.FC = () => {
           onResetEdits={handleResetEdits}
           onAutoEditSingle={handleAutoEditSingle}
           onUpdateSelection={handleUpdateSelection}
-          healBrushActive={healBrushActive}
-          onToggleHealBrush={(active) => {
-            setHealBrushActive(active);
-            if (active && viewMode === 'grid') {
-              setViewMode('before-after');
-            }
-          }}
-          healBrushRadius={healBrushRadius}
-          onChangeHealBrushRadius={setHealBrushRadius}
         />
       </div>
 

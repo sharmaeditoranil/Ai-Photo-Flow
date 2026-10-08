@@ -530,10 +530,9 @@ class IndianWeddingEditingModel(EditingModel):
         sharpening = float(np.clip(sharpening * 1.05, 22.0, 48.0))
 
 
-        # User Requirement: Subtle SkinFiner-grade skin smoothing, gentle 3D Dodge & Burn & Retouch4me Face Clean
+        # User Requirement: Subtle SkinFiner-grade skin smoothing, gentle 3D Dodge & Burn
         auto_skin_smooth = 25.0
         auto_dodge_burn = 20.0
-        auto_blemish = 50.0 if (subject_info.get("faces_count", 0) > 0 or has_subject_skin) else 0.0
 
         res_params = EditParameters(
             exposure=round(exposure, 2),
@@ -550,9 +549,7 @@ class IndianWeddingEditingModel(EditingModel):
             noise_reduction=round(noise_reduction, 1),
             straighten=round(straighten, 1),
             preset_name=preset_name,
-            auto_blemish=round(auto_blemish, 1),
-            heal_opacity=100.0,
-            heal_face_preset="AUTO",
+            auto_blemish=0.0,
             skin_smoothing=round(auto_skin_smooth, 1),
             dodge_burn=round(auto_dodge_burn, 1)
         )

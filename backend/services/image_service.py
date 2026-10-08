@@ -485,47 +485,7 @@ def apply_edit_pipeline(
         except Exception:
             pass
 
-    # 6. Commercial-Grade AI Heal: Scale-Normalized Face Blemish & Spot Removal (Non-Destructive)
-    heal_spots = getattr(params, 'heal_spots', []) or []
-    auto_blemish = float(getattr(params, 'auto_blemish', 0.0) or 0.0)
-    heal_opacity = float(getattr(params, 'heal_opacity', 100.0) or 100.0)
-    heal_face_preset = str(getattr(params, 'heal_face_preset', 'AUTO') or 'AUTO')
-
-    if (heal_spots and len(heal_spots) > 0) or auto_blemish > 1.0:
-        try:
-            from backend.heal.pipeline import AIHealPipeline
-            f_boxes = detected_face_boxes
-            if not f_boxes and face_detector is not None:
-                h_cur, w_cur = img.shape[:2]
-                proxy_s = 800.0 / float(max(h_cur, w_cur)) if max(h_cur, w_cur) > 1000 else 1.0
-                proxy_u8 = cv2.resize(np.clip(img, 0, 255).astype(np.uint8), (int(w_cur * proxy_s), int(h_cur * proxy_s)), interpolation=cv2.INTER_AREA) if proxy_s < 1.0 else np.clip(img, 0, 255).astype(np.uint8)
-                f_m = face_detector.detect(proxy_u8)
-                if f_m and f_m.bounding_boxes:
-                    inv_s = 1.0 / proxy_s
-                    f_boxes = [
-                        {
-                            "x": int(b["x"] * inv_s),
-                            "y": int(b["y"] * inv_s),
-                            "w": int(b["w"] * inv_s),
-                            "h": int(b["h"] * inv_s)
-                        }
-                        for b in f_m.bounding_boxes
-                    ]
-
-            heal_pipeline = AIHealPipeline(face_model=face_detector)
-            heal_result = heal_pipeline.process_image(
-                img,
-                strength=auto_blemish,
-                opacity=heal_opacity,
-                face_preset=heal_face_preset,
-                manual_spots=heal_spots,
-                precomputed_face_boxes=f_boxes
-            )
-            img = heal_result.blended_rgb.astype(np.float32)
-        except Exception:
-            pass
-
-    # 7. SkinFiner-Style Texture-Preserving Facial Skin Smoothing (Fast Face-Localized & Proxy-Accelerated)
+    # 6. SkinFiner-Style Texture-Preserving Facial Skin Smoothing (Fast Face-Localized & Proxy-Accelerated)
     skin_smoothing = float(getattr(params, 'skin_smoothing', 0.0) or 0.0)
     if skin_smoothing > 1.0:
         try:

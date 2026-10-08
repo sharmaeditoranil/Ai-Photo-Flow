@@ -8,8 +8,7 @@ import {
   Sparkles, RotateCcw, Sliders, ShieldCheck,
   CheckCircle2, AlertTriangle, Eye, Activity,
   Star, CheckCircle, XCircle, Tag, Copy,
-  LayoutGrid, List, Check, Wand2, Bandage,
-  Crosshair, Undo2, Trash2
+  LayoutGrid, List, Check, Wand2
 } from 'lucide-react';
 
 
@@ -21,10 +20,6 @@ interface InspectorPanelProps {
   onUpdateSelection?: (photoId: number, selection: UserSelection) => void;
   selectedStylePreset?: string;
   onSelectStylePreset?: (presetName: string) => void;
-  healBrushActive?: boolean;
-  onToggleHealBrush?: (active: boolean) => void;
-  healBrushRadius?: number;
-  onChangeHealBrushRadius?: (radius: number) => void;
 }
 
 export const InspectorPanel: React.FC<InspectorPanelProps> = ({
@@ -35,10 +30,6 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onUpdateSelection,
   selectedStylePreset,
   onSelectStylePreset,
-  healBrushActive,
-  onToggleHealBrush,
-  healBrushRadius = 0.018,
-  onChangeHealBrushRadius,
 }) => {
 
   if (!photo) {
@@ -618,141 +609,20 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
         </div>
       </div>
 
-      {/* 3.5. AI & Manual Skin Healing (पिंपल व दाग हटाएँ) */}
+      {/* 3.5. Portrait & Skin Enhancement */}
       <div style={{ padding: '14px', borderBottom: '1px solid #1c202a', background: 'linear-gradient(180deg, #131720 0%, #11141b 100%)' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-            <Bandage size={14} style={{ color: '#10b981' }} />
+            <Sparkles size={14} style={{ color: '#38bdf8' }} />
             <span style={{ fontSize: '11px', fontWeight: 700, color: '#f1f5f9', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-              Face & Skin Healing
+              Portrait &amp; Skin Enhancement
             </span>
           </div>
-          <span style={{ fontSize: '9.5px', background: 'rgba(16, 185, 129, 0.15)', color: '#34d399', padding: '2px 6px', borderRadius: '4px', fontWeight: 600, border: '1px solid rgba(16, 185, 129, 0.3)' }}>
-            AI + Manual
+          <span style={{ fontSize: '9.5px', background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8', padding: '2px 6px', borderRadius: '4px', fontWeight: 600, border: '1px solid rgba(56, 189, 248, 0.3)' }}>
+            Natural Glow
           </span>
         </div>
 
-        {/* AI Heal: Blemish Detection Sensitivity Slider */}
-        <div className="slider-group" style={{ marginBottom: '10px' }}>
-          <div className="slider-header">
-            <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-              <span style={{ fontWeight: 600, color: '#e2e8f0' }}>AI Heal (Detection Strength)</span>
-              <span style={{ fontSize: '10px', color: '#64748b' }}>(पिंपल रिमूवल)</span>
-            </span>
-            <span className="slider-val" style={{ color: (edits.auto_blemish ?? 0) > 0 ? '#34d399' : '#94a3b8' }}>
-              {(edits.auto_blemish ?? 0) > 0 ? `${Math.round(edits.auto_blemish ?? 0)}%` : 'Off'}
-            </span>
-          </div>
-          <input
-            type="range"
-            min="0"
-            max="100"
-            step="5"
-            value={edits.auto_blemish ?? 0}
-            onChange={(e) => handleSliderChange('auto_blemish' as any, parseFloat(e.target.value))}
-            style={{ accentColor: '#10b981' }}
-          />
-
-          {/* Quick preset buttons */}
-          <div style={{ display: 'flex', gap: '4px', marginTop: '6px' }}>
-            {[
-              { label: 'Off', val: 0 },
-              { label: 'Light', val: 30 },
-              { label: 'Natural', val: 60 },
-              { label: 'Strong', val: 90 },
-            ].map(lvl => (
-              <button
-                key={lvl.val}
-                type="button"
-                onClick={() => handleSliderChange('auto_blemish' as any, lvl.val)}
-                style={{
-                  flex: 1,
-                  padding: '3px 0',
-                  fontSize: '9.5px',
-                  borderRadius: '4px',
-                  border: (edits.auto_blemish ?? 0) === lvl.val ? '1px solid #10b981' : '1px solid #232836',
-                  background: (edits.auto_blemish ?? 0) === lvl.val ? 'rgba(16, 185, 129, 0.2)' : '#181b22',
-                  color: (edits.auto_blemish ?? 0) === lvl.val ? '#34d399' : '#94a3b8',
-                  cursor: 'pointer'
-                }}
-              >
-                {lvl.label}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {/* AI Heal: Non-destructive Opacity Blend Slider (Only visible when active) */}
-        {(edits.auto_blemish ?? 0) > 0 && (
-          <div className="slider-group" style={{ marginBottom: '10px', background: 'rgba(15, 23, 42, 0.4)', padding: '6px 8px', borderRadius: '6px', border: '1px solid #1e293b' }}>
-            <div className="slider-header">
-              <span style={{ fontSize: '11px', color: '#cbd5e1', fontWeight: 500 }}>
-                Heal Layer Opacity (Blend)
-              </span>
-              <span className="slider-val" style={{ color: '#38bdf8' }}>
-                {Math.round(edits.heal_opacity ?? 100)}%
-              </span>
-            </div>
-            <input
-              type="range"
-              min="0"
-              max="100"
-              step="5"
-              value={edits.heal_opacity ?? 100}
-              onChange={(e) => handleSliderChange('heal_opacity' as any, parseFloat(e.target.value))}
-              style={{ accentColor: '#38bdf8' }}
-            />
-            <div style={{ fontSize: '9px', color: '#64748b', marginTop: '2px' }}>
-              Non-destructive: blends healed layer with original portrait in real time.
-            </div>
-          </div>
-        )}
-
-        {/* AI Heal: Face Scale Presets */}
-        {(edits.auto_blemish ?? 0) > 0 && (
-          <div style={{ marginBottom: '12px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '4px' }}>
-              <span style={{ fontSize: '10.5px', color: '#94a3b8', fontWeight: 500 }}>
-                Face Scale Normalization:
-              </span>
-              <span style={{ fontSize: '9px', color: (edits.heal_face_preset || 'AUTO') === 'AUTO' ? '#34d399' : '#38bdf8', fontWeight: 600 }}>
-                {(edits.heal_face_preset || 'AUTO') === 'AUTO' ? 'Auto-Detected' : (edits.heal_face_preset || 'AUTO')}
-              </span>
-            </div>
-            <div style={{ display: 'flex', gap: '4px' }}>
-              {[
-                { id: 'AUTO', label: 'Auto Scale' },
-                { id: 'SMALL', label: 'Small Face' },
-                { id: 'MEDIUM', label: 'Medium' },
-                { id: 'LARGE', label: 'Large (Close-up)' },
-              ].map(preset => {
-                const isSelected = (edits.heal_face_preset || 'AUTO') === preset.id;
-                return (
-                  <button
-                    key={preset.id}
-                    type="button"
-                    onClick={() => handleParamChange('heal_face_preset', preset.id)}
-                    style={{
-                      flex: 1,
-                      padding: '3px 0',
-                      fontSize: '9px',
-                      borderRadius: '4px',
-                      border: isSelected ? '1px solid #38bdf8' : '1px solid #232836',
-                      background: isSelected ? 'rgba(56, 189, 248, 0.2)' : '#181b22',
-                      color: isSelected ? '#38bdf8' : '#94a3b8',
-                      cursor: 'pointer'
-                    }}
-                  >
-                    {preset.label}
-                  </button>
-                );
-              })}
-            </div>
-            <div style={{ fontSize: '9px', color: '#64748b', marginTop: '4px', lineHeight: '1.3' }}>
-              Scale-invariant blemish removal: maintains natural pores and leaves eyes, lips & jewelry untouched.
-            </div>
-          </div>
-        )}
 
         {/* SkinFiner-Style Skin Smoothing Slider */}
         <div className="slider-group" style={{ marginBottom: '12px', paddingTop: '8px', borderTop: '1px dashed #232836' }}>
@@ -860,130 +730,6 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           </div>
         </div>
 
-        {/* Spot Healing Brush Toggle */}
-        <div style={{ paddingTop: '8px', borderTop: '1px dashed #232836' }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-            <span style={{ fontSize: '11px', fontWeight: 600, color: '#e2e8f0', display: 'flex', alignItems: 'center', gap: '4px' }}>
-              <Crosshair size={12} style={{ color: '#38bdf8' }} />
-              Manual Spot Healing Brush
-            </span>
-            <span style={{ fontSize: '10px', color: (edits.heal_spots?.length || 0) > 0 ? '#38bdf8' : '#64748b' }}>
-              {edits.heal_spots?.length || 0} spots
-            </span>
-          </div>
-
-          <button
-            type="button"
-            onClick={() => onToggleHealBrush && onToggleHealBrush(!healBrushActive)}
-            style={{
-              width: '100%',
-              padding: '7px 10px',
-              borderRadius: '6px',
-              border: healBrushActive ? '1px solid #10b981' : '1px solid #2d3748',
-              background: healBrushActive ? 'rgba(16, 185, 129, 0.22)' : '#1e2430',
-              color: healBrushActive ? '#34d399' : '#cbd5e1',
-              fontWeight: 600,
-              fontSize: '11px',
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '6px',
-              boxShadow: healBrushActive ? '0 0 12px rgba(16, 185, 129, 0.3)' : 'none',
-              transition: 'all 0.15s ease'
-            }}
-          >
-            <Bandage size={13} style={{ color: healBrushActive ? '#34d399' : '#94a3b8' }} />
-            <span>{healBrushActive ? '🩹 Spot Brush: ACTIVE (Click Photo)' : '🩹 Activate Spot Heal Brush'}</span>
-          </button>
-
-            {/* Brush Radius & Controls */}
-            <div style={{ marginTop: '8px', display: 'flex', flexDirection: 'column', gap: '6px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <span style={{ fontSize: '10px', color: '#94a3b8' }}>Brush Radius (Size)</span>
-                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                  <span
-                    style={{
-                      display: 'inline-block',
-                      width: `${Math.max(4, Math.min(16, Math.round((healBrushRadius || 0.010) * 600)))}px`,
-                      height: `${Math.max(4, Math.min(16, Math.round((healBrushRadius || 0.010) * 600)))}px`,
-                      borderRadius: '50%',
-                      background: '#38bdf8',
-                      border: '1px solid #fff'
-                    }}
-                  />
-                  <span style={{ fontSize: '10px', color: '#38bdf8', minWidth: '32px', textAlign: 'right', fontWeight: 600 }}>
-                    {Math.round((healBrushRadius || 0.010) * 1000)}px
-                  </span>
-                </div>
-              </div>
-              <input
-                type="range"
-                min="0.004"
-                max="0.024"
-                step="0.001"
-                value={healBrushRadius || 0.010}
-                onChange={(e) => onChangeHealBrushRadius && onChangeHealBrushRadius(parseFloat(e.target.value))}
-                style={{ accentColor: '#38bdf8' }}
-              />
-
-            {/* Undo & Clear Buttons */}
-            <div style={{ display: 'flex', gap: '6px', marginTop: '4px' }}>
-              <button
-                type="button"
-                disabled={!edits.heal_spots || edits.heal_spots.length === 0}
-                onClick={() => {
-                  if (!edits.heal_spots || edits.heal_spots.length === 0) return;
-                  const newSpots = edits.heal_spots.slice(0, -1);
-                  onUpdateEdits(photo.id, { ...edits, heal_spots: newSpots });
-                }}
-                style={{
-                  flex: 1,
-                  padding: '4px 6px',
-                  fontSize: '10px',
-                  borderRadius: '4px',
-                  border: '1px solid #2d3342',
-                  background: '#181b22',
-                  color: (edits.heal_spots?.length || 0) > 0 ? '#cbd5e1' : '#475569',
-                  cursor: (edits.heal_spots?.length || 0) > 0 ? 'pointer' : 'not-allowed',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '4px'
-                }}
-              >
-                <Undo2 size={11} />
-                <span>Undo Spot</span>
-              </button>
-
-              <button
-                type="button"
-                disabled={!edits.heal_spots || edits.heal_spots.length === 0}
-                onClick={() => {
-                  if (!edits.heal_spots || edits.heal_spots.length === 0) return;
-                  onUpdateEdits(photo.id, { ...edits, heal_spots: [] });
-                }}
-                style={{
-                  flex: 1,
-                  padding: '4px 6px',
-                  fontSize: '10px',
-                  borderRadius: '4px',
-                  border: '1px solid #3f2222',
-                  background: '#1a1315',
-                  color: (edits.heal_spots?.length || 0) > 0 ? '#f87171' : '#475569',
-                  cursor: (edits.heal_spots?.length || 0) > 0 ? 'pointer' : 'not-allowed',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '4px'
-                }}
-              >
-                <Trash2 size={11} />
-                <span>Clear Spots</span>
-              </button>
-            </div>
-          </div>
-        </div>
       </div>
 
 
