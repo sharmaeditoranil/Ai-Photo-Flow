@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Share2, X, Copy, Check, ExternalLink, ShieldCheck, Lock, Smartphone, RefreshCw, Send } from 'lucide-react';
+import { Share2, X, Copy, Check, ExternalLink, ShieldCheck, Lock, Smartphone, RefreshCw, Send, Globe, Wifi, Radio } from 'lucide-react';
 import { api } from '../api';
 import { Project, Photo, ClientGallery, BatchJob } from '../types';
 
@@ -34,13 +34,54 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
   const [autoUnlockLink, setAutoUnlockLink] = useState(true);
   const [existingGalleries, setExistingGalleries] = useState<ClientGallery[]>([]);
 
+  // Mobile & Tunnel state
+  const [linkMode, setLinkMode] = useState<'online' | 'wifi' | 'local'>('online');
+  const [tunnelUrl, setTunnelUrl] = useState<string | null>(null);
+  const [localIp, setLocalIp] = useState<string>('127.0.0.1');
+  const [isTunnelLoading, setIsTunnelLoading] = useState(false);
+  const [tunnelError, setTunnelError] = useState<string | null>(null);
+
   useEffect(() => {
     if (project && isOpen) {
       setTitle(project.name || 'Wedding Photo Selection');
       setClientName(project.name.replace(/^Wedding\s*[-–]\s*/i, ''));
       loadExistingGalleries();
+      loadNetworkInfo();
     }
   }, [project, isOpen]);
+
+  const loadNetworkInfo = async () => {
+    try {
+      const info = await api.getNetworkInfo();
+      if (info.local_ip) setLocalIp(info.local_ip);
+      if (info.url) {
+        setTunnelUrl(info.url);
+      } else {
+        handleStartTunnel();
+      }
+    } catch (e) {
+      console.error('Error fetching network info:', e);
+    }
+  };
+
+  const handleStartTunnel = async () => {
+    setIsTunnelLoading(true);
+    setTunnelError(null);
+    try {
+      const res = await api.startPublicTunnel();
+      if (res.success && res.url) {
+        setTunnelUrl(res.url);
+      } else {
+        setTunnelError(res.error || 'Failed to start online link');
+        if (linkMode === 'online') setLinkMode('wifi');
+      }
+    } catch (e: any) {
+      setTunnelError(e.message || 'Online link unavailable');
+      if (linkMode === 'online') setLinkMode('wifi');
+    } finally {
+      setIsTunnelLoading(false);
+    }
+  };
 
   // Poll preview generation batch job
   useEffect(() => {
@@ -121,8 +162,22 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
     }
   };
 
-  const getFullShareUrl = (galleryUuid: string, withPin: boolean = autoUnlockLink) => {
-    const origin = window.location.origin.includes('file:') ? 'http://127.0.0.1:8000' : window.location.origin;
+  const getBaseOrigin = (mode: 'online' | 'wifi' | 'local' = linkMode) => {
+    if (mode === 'online' && tunnelUrl) {
+      return tunnelUrl;
+    }
+    if (mode === 'wifi' && localIp && localIp !== '127.0.0.1') {
+      return `http://${localIp}:8000`;
+    }
+    return window.location.origin.includes('file:') ? 'http://127.0.0.1:8000' : window.location.origin;
+  };
+
+  const getFullShareUrl = (
+    galleryUuid: string,
+    mode: 'online' | 'wifi' | 'local' = linkMode,
+    withPin: boolean = autoUnlockLink
+  ) => {
+    const origin = getBaseOrigin(mode);
     const pin = activeGallery?.client_pin;
     if (withPin && pin) {
       return `${origin}/gallery/${galleryUuid}?pin=${encodeURIComponent(pin)}`;
@@ -136,12 +191,17 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  const handleShareWhatsApp = (url: string) => {
+  const handleShareWhatsApp = () => {
+    if (!activeGallery) return;
+    // Prefer online link for WhatsApp so client can open on mobile phone anywhere
+    const effectiveMode = tunnelUrl ? 'online' : (localIp !== '127.0.0.1' ? 'wifi' : 'local');
+    const shareUrl = getFullShareUrl(activeGallery.gallery_uuid, effectiveMode, autoUnlockLink);
+
     const pinInfo = (activeGallery?.client_pin && !autoUnlockLink)
       ? `\n🔑 Gallery Access PIN: *${activeGallery.client_pin}*\n`
       : '';
     const message = encodeURIComponent(
-      `Namaste ${clientName || 'Ji'}! Aapke wedding photos ka selection link ready ho gaya hai.\n\n👉 Click to view & select: ${url}\n${pinInfo}\n(Note: Photos par ❤️ Select ya ✖ Reject tap karein aur final hone par Submit button click karein).`
+      `Namaste ${clientName || 'Ji'}! Aapke wedding photos ka selection link ready ho gaya hai.\n\n👉 Click to view & select: ${shareUrl}\n${pinInfo}\n(Note: Photos par ❤️ Select ya ✖ Reject tap karein aur final hone par Submit Selection button dabayein).`
     );
     window.open(`https://api.whatsapp.com/send?text=${message}`, '_blank');
   };
@@ -305,6 +365,79 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
                 </div>
               )}
 
+              {/* Link Mode Selector Tabs */}
+              <div style={{
+                display: 'flex', gap: '4px', background: '#0a0d14', padding: '3px',
+                borderRadius: '8px', border: '1px solid #1e2638', marginBottom: '10px'
+              }}>
+                <button
+                  type="button"
+                  onClick={() => setLinkMode('online')}
+                  style={{
+                    flex: 1, padding: '6px 8px', borderRadius: '6px', border: 'none',
+                    background: linkMode === 'online' ? '#2563eb' : 'transparent',
+                    color: linkMode === 'online' ? '#fff' : '#94a3b8',
+                    fontSize: '11px', fontWeight: 600, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px'
+                  }}
+                >
+                  <Globe size={12} />
+                  <span>Mobile (Online / 4G)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLinkMode('wifi')}
+                  style={{
+                    flex: 1, padding: '6px 8px', borderRadius: '6px', border: 'none',
+                    background: linkMode === 'wifi' ? '#1e293b' : 'transparent',
+                    color: linkMode === 'wifi' ? '#60a5fa' : '#94a3b8',
+                    fontSize: '11px', fontWeight: 600, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px'
+                  }}
+                >
+                  <Wifi size={12} />
+                  <span>Same Wi-Fi (Studio)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLinkMode('local')}
+                  style={{
+                    flex: 1, padding: '6px 8px', borderRadius: '6px', border: 'none',
+                    background: linkMode === 'local' ? '#1e293b' : 'transparent',
+                    color: linkMode === 'local' ? '#cbd5e1' : '#94a3b8',
+                    fontSize: '11px', fontWeight: 600, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px'
+                  }}
+                >
+                  <span>This PC</span>
+                </button>
+              </div>
+
+              {/* Mode Status Description */}
+              {linkMode === 'online' && (
+                <div style={{ fontSize: '11px', color: '#10b981', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', background: 'rgba(16, 185, 129, 0.08)', padding: '5px 10px', borderRadius: '6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: tunnelUrl ? '#10b981' : '#f59e0b', display: 'inline-block' }}></span>
+                    {tunnelUrl ? (
+                      <span><strong>Live Mobile Link:</strong> Mobile par 4G/5G/Wi-Fi kahin se bhi direct chalega!</span>
+                    ) : (
+                      <span>{isTunnelLoading ? 'Connecting secure online link...' : (tunnelError || 'Generating online link...')}</span>
+                    )}
+                  </div>
+                  {!tunnelUrl && !isTunnelLoading && (
+                    <button type="button" onClick={handleStartTunnel} className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: '10px' }}>
+                      ⚡ Connect
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {linkMode === 'wifi' && (
+                <div style={{ fontSize: '11px', color: '#60a5fa', marginBottom: '8px', background: 'rgba(59, 130, 246, 0.08)', padding: '5px 10px', borderRadius: '6px' }}>
+                  📶 <strong>Studio Wi-Fi Link ({localIp}):</strong> Mobile aur PC dono ek hi Wi-Fi network par hone chahiye.
+                </div>
+              )}
+
               <div style={{
                 display: 'flex', gap: '8px', background: '#0a0d14', padding: '8px 12px',
                 borderRadius: '8px', border: '1px solid #1e2638', alignItems: 'center', marginBottom: '12px'
@@ -312,7 +445,7 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
                 <input
                   type="text"
                   readOnly
-                  value={getFullShareUrl(activeGallery.gallery_uuid, autoUnlockLink)}
+                  value={getFullShareUrl(activeGallery.gallery_uuid, linkMode, autoUnlockLink)}
                   style={{
                     flex: 1, background: 'transparent', border: 'none', color: '#60a5fa',
                     fontSize: '12px', outline: 'none', fontFamily: 'monospace'
@@ -320,7 +453,7 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
                 />
                 <button
                   type="button"
-                  onClick={() => handleCopyLink(getFullShareUrl(activeGallery.gallery_uuid, autoUnlockLink))}
+                  onClick={() => handleCopyLink(getFullShareUrl(activeGallery.gallery_uuid, linkMode, autoUnlockLink))}
                   className="btn btn-secondary"
                   style={{ padding: '4px 10px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}
                 >
@@ -332,7 +465,7 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                 <button
                   type="button"
-                  onClick={() => handleShareWhatsApp(getFullShareUrl(activeGallery.gallery_uuid, autoUnlockLink))}
+                  onClick={handleShareWhatsApp}
                   style={{
                     flex: 1, padding: '8px 14px', background: '#25d366', color: '#fff',
                     border: 'none', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
@@ -343,7 +476,7 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => window.open(getFullShareUrl(activeGallery.gallery_uuid, true), '_blank')}
+                  onClick={() => window.open(getFullShareUrl(activeGallery.gallery_uuid, 'local', true), '_blank')}
                   className="btn btn-secondary"
                   style={{ padding: '8px 14px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}
                 >

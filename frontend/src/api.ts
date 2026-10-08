@@ -498,6 +498,21 @@ export const api = {
       throw new Error(err.detail || 'Failed to export client selected photos');
     }
     return res.json();
+  },
+
+  async getNetworkInfo(): Promise<{ status: string; url: string | null; local_ip: string; port: number; error?: string }> {
+    const res = await fetch(`${API_BASE}/proofing/network-info`);
+    return res.json();
+  },
+
+  async startPublicTunnel(): Promise<{ success: boolean; url?: string; status: string; error?: string; local_ip: string }> {
+    const res = await fetch(`${API_BASE}/proofing/tunnel/start`, { method: 'POST' });
+    return res.json();
+  },
+
+  async stopPublicTunnel(): Promise<{ status: string }> {
+    const res = await fetch(`${API_BASE}/proofing/tunnel/stop`, { method: 'POST' });
+    return res.json();
   }
 };
 

@@ -71,6 +71,10 @@
         {
           "from": "sample_wedding_photos",
           "to": "sample_wedding_photos"
+        },
+        {
+          "from": "build/cloudflared-darwin-arm64",
+          "to": "cloudflared"
         }
       ]
     },

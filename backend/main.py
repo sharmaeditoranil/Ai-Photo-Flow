@@ -26,6 +26,7 @@ from backend.core.photoshop_integration import PhotoshopUXPIntegration
 from backend.core.editing_model import IndianWeddingEditingModel
 from backend.services.license_service import LicenseService
 from backend.services.proofing_service import proofing_service, PROOFING_CACHE_DIR
+from backend.services.tunnel_service import tunnel_service
 
 app = FastAPI(title="Ai PhotoFlow Core API", version="1.0.0")
 
@@ -1217,7 +1218,23 @@ def export_client_selected_photos(req: ExportClientSelectedRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# --- Mobile Tunnel & Network Sharing Endpoints ---
+@app.get("/api/proofing/network-info")
+def get_network_info():
+    return tunnel_service.get_info()
+
+@app.post("/api/proofing/tunnel/start")
+def start_public_tunnel():
+    return tunnel_service.start_tunnel()
+
+@app.post("/api/proofing/tunnel/stop")
+def stop_public_tunnel():
+    tunnel_service.stop_tunnel()
+    return {"status": "OFFLINE"}
+
+
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("backend.main:app", host="127.0.0.1", port=8000, reload=False)
+    uvicorn.run("backend.main:app", host="0.0.0.0", port=8000, reload=False)
+
 

@@ -52,9 +52,9 @@ except Exception as e:
 if __name__ == "__main__":
     multiprocessing.freeze_support()
     port = int(os.environ.get("PORT", 8000))
-    print(f"Ai PhotoFlow Backend running on port {port}...")
+    print(f"Ai PhotoFlow Backend running on 0.0.0.0:{port}...")
     try:
-        uvicorn.run(app, host="127.0.0.1", port=port, log_level="info")
+        uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
     except Exception as e:
         import traceback
         err_msg = traceback.format_exc()
