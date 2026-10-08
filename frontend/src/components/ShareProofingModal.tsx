@@ -30,6 +30,8 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
   const [activeGallery, setActiveGallery] = useState<any | null>(null);
   const [activeJob, setActiveJob] = useState<BatchJob | null>(null);
   const [copied, setCopied] = useState(false);
+  const [pinCopied, setPinCopied] = useState(false);
+  const [autoUnlockLink, setAutoUnlockLink] = useState(true);
   const [existingGalleries, setExistingGalleries] = useState<ClientGallery[]>([]);
 
   useEffect(() => {
@@ -119,8 +121,12 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
     }
   };
 
-  const getFullShareUrl = (galleryUuid: string) => {
+  const getFullShareUrl = (galleryUuid: string, withPin: boolean = autoUnlockLink) => {
     const origin = window.location.origin.includes('file:') ? 'http://127.0.0.1:8000' : window.location.origin;
+    const pin = activeGallery?.client_pin;
+    if (withPin && pin) {
+      return `${origin}/gallery/${galleryUuid}?pin=${encodeURIComponent(pin)}`;
+    }
     return `${origin}/gallery/${galleryUuid}`;
   };
 
@@ -131,8 +137,11 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
   };
 
   const handleShareWhatsApp = (url: string) => {
+    const pinInfo = (activeGallery?.client_pin && !autoUnlockLink)
+      ? `\n🔑 Gallery Access PIN: *${activeGallery.client_pin}*\n`
+      : '';
     const message = encodeURIComponent(
-      `Namaste ${clientName || 'Ji'}! Aapke wedding photos ka selection link ready ho gaya hai.\n\n👉 Click to view & select: ${url}\n\n(Note: Photos par ❤️ Select ya ✖ Reject tap karein aur final hone par Submit button click karein).`
+      `Namaste ${clientName || 'Ji'}! Aapke wedding photos ka selection link ready ho gaya hai.\n\n👉 Click to view & select: ${url}\n${pinInfo}\n(Note: Photos par ❤️ Select ya ✖ Reject tap karein aur final hone par Submit button click karein).`
     );
     window.open(`https://api.whatsapp.com/send?text=${message}`, '_blank');
   };
@@ -259,6 +268,43 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
                 </span>
               </div>
 
+              {/* PIN Badge & Auto-Unlock Option */}
+              {activeGallery.client_pin && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                  background: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.25)',
+                  padding: '7px 12px', borderRadius: '8px', marginBottom: '10px'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <span style={{ fontSize: '11px', color: '#fbbf24', fontWeight: 600 }}>🔑 Security PIN:</span>
+                    <span style={{ fontSize: '13px', fontWeight: 700, color: '#fef08a', fontFamily: 'monospace', letterSpacing: '1px' }}>
+                      {activeGallery.client_pin}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        navigator.clipboard.writeText(activeGallery.client_pin);
+                        setPinCopied(true);
+                        setTimeout(() => setPinCopied(false), 2000);
+                      }}
+                      className="btn btn-secondary"
+                      style={{ padding: '2px 8px', fontSize: '10px' }}
+                    >
+                      {pinCopied ? '✓ Copied' : 'Copy PIN'}
+                    </button>
+                  </div>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#cbd5e1', cursor: 'pointer' }}>
+                    <input
+                      type="checkbox"
+                      checked={autoUnlockLink}
+                      onChange={e => setAutoUnlockLink(e.target.checked)}
+                      style={{ cursor: 'pointer', accentColor: '#3b82f6' }}
+                    />
+                    Auto-Unlock Link (Direct photos view)
+                  </label>
+                </div>
+              )}
+
               <div style={{
                 display: 'flex', gap: '8px', background: '#0a0d14', padding: '8px 12px',
                 borderRadius: '8px', border: '1px solid #1e2638', alignItems: 'center', marginBottom: '12px'
@@ -266,7 +312,7 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
                 <input
                   type="text"
                   readOnly
-                  value={getFullShareUrl(activeGallery.gallery_uuid)}
+                  value={getFullShareUrl(activeGallery.gallery_uuid, autoUnlockLink)}
                   style={{
                     flex: 1, background: 'transparent', border: 'none', color: '#60a5fa',
                     fontSize: '12px', outline: 'none', fontFamily: 'monospace'
@@ -274,7 +320,7 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
                 />
                 <button
                   type="button"
-                  onClick={() => handleCopyLink(getFullShareUrl(activeGallery.gallery_uuid))}
+                  onClick={() => handleCopyLink(getFullShareUrl(activeGallery.gallery_uuid, autoUnlockLink))}
                   className="btn btn-secondary"
                   style={{ padding: '4px 10px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}
                 >
@@ -286,7 +332,7 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
               <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                 <button
                   type="button"
-                  onClick={() => handleShareWhatsApp(getFullShareUrl(activeGallery.gallery_uuid))}
+                  onClick={() => handleShareWhatsApp(getFullShareUrl(activeGallery.gallery_uuid, autoUnlockLink))}
                   style={{
                     flex: 1, padding: '8px 14px', background: '#25d366', color: '#fff',
                     border: 'none', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
@@ -297,7 +343,7 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => window.open(getFullShareUrl(activeGallery.gallery_uuid), '_blank')}
+                  onClick={() => window.open(getFullShareUrl(activeGallery.gallery_uuid, true), '_blank')}
                   className="btn btn-secondary"
                   style={{ padding: '8px 14px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}
                 >
