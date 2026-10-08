@@ -573,6 +573,7 @@ export const App: React.FC = () => {
         defaultFolder={currentProject?.folder_path || ''}
         projectId={currentProject?.id}
         clientSelectedCount={currentProject?.counts?.client_selected_count || 0}
+        activeCategory={currentCategory}
         onStartExport={handleStartExport}
       />
 

@@ -1,0 +1,36 @@
+# Ai PhotoFlow Master Hosting .htaccess
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /
+    # Enable CORS for desktop app API
+    Header set Access-Control-Allow-Origin "*"
+    Header set Access-Control-Allow-Methods "GET, POST, OPTIONS, PUT, DELETE"
+    Header set Access-Control-Allow-Headers "Content-Type, Authorization, X-Requested-With"
+</IfModule>
+
+# Increase Upload Limits for High-Res Preview Uploads
+<IfModule mod_php.c>
+    php_value upload_max_filesize 64M
+    php_value post_max_size 64M
+    php_value memory_limit 128M
+    php_value max_execution_time 300
+</IfModule>
+<IfModule mod_php7.c>
+    php_value upload_max_filesize 64M
+    php_value post_max_size 64M
+    php_value memory_limit 128M
+    php_value max_execution_time 300
+</IfModule>
+<IfModule mod_php8.c>
+    php_value upload_max_filesize 64M
+    php_value post_max_size 64M
+    php_value memory_limit 128M
+    php_value max_execution_time 300
+</IfModule>
+
+# Protect Data Directory
+<FilesMatch "\.(json|db|sqlite)$">
+    # Deny direct access to data json files if requested directly
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>

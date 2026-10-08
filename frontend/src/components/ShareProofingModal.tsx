@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   Share2, X, Copy, Check, ExternalLink, ShieldCheck, Lock,
   Smartphone, RefreshCw, Send, Globe, Wifi, Radio, Server,
-  FolderOpen, HardDrive, Sparkles
+  FolderOpen, HardDrive, Sparkles, Settings
 } from 'lucide-react';
 import { api, BACKEND_ORIGIN, BACKEND_PORT } from '../api';
 import { Project, Photo, ClientGallery, BatchJob } from '../types';
@@ -50,8 +50,8 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
   const [cfToken, setCfToken] = useState<string>('');
   const [isSavingDomain, setIsSavingDomain] = useState<boolean>(false);
   const [domainSaveMessage, setDomainSaveMessage] = useState<string | null>(null);
+  const [showAdminDomainSetup, setShowAdminDomainSetup] = useState<boolean>(false);
 
-  // Standalone Hosting Export state
   const [standaloneExportFolder, setStandaloneExportFolder] = useState<string>('/Users/anilsharma/Desktop/Client_Proofing_Web');
   const [isExportingStandalone, setIsExportingStandalone] = useState<boolean>(false);
   const [standaloneExportSuccess, setStandaloneExportSuccess] = useState<string | null>(null);
@@ -439,231 +439,75 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
                 </div>
               )}
 
-              {/* Link Mode Selector Tabs */}
+              {/* Single Clean Ready-to-Share Link Box */}
               <div style={{
-                display: 'flex', gap: '4px', background: '#0a0d14', padding: '3px',
-                borderRadius: '8px', border: '1px solid #1e2638', marginBottom: '10px'
+                background: 'rgba(15, 23, 42, 0.6)',
+                border: '1px solid #1e293b',
+                borderRadius: '8px',
+                padding: '10px 12px',
+                marginBottom: '12px'
               }}>
-                <button
-                  type="button"
-                  onClick={() => setLinkMode('online')}
-                  style={{
-                    flex: 1, padding: '6px 6px', borderRadius: '6px', border: 'none',
-                    background: linkMode === 'online' ? '#2563eb' : 'transparent',
-                    color: linkMode === 'online' ? '#fff' : '#94a3b8',
-                    fontSize: '11px', fontWeight: 600, cursor: 'pointer',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px'
-                  }}
-                >
-                  <Globe size={12} />
-                  <span>Cloudflare Link</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setLinkMode('domain')}
-                  style={{
-                    flex: 1, padding: '6px 6px', borderRadius: '6px', border: 'none',
-                    background: linkMode === 'domain' ? '#8b5cf6' : 'transparent',
-                    color: linkMode === 'domain' ? '#fff' : '#94a3b8',
-                    fontSize: '11px', fontWeight: 600, cursor: 'pointer',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px'
-                  }}
-                >
-                  <Server size={12} />
-                  <span>Apna Domain / Hosting</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setLinkMode('wifi')}
-                  style={{
-                    flex: 1, padding: '6px 6px', borderRadius: '6px', border: 'none',
-                    background: linkMode === 'wifi' ? '#1e293b' : 'transparent',
-                    color: linkMode === 'wifi' ? '#60a5fa' : '#94a3b8',
-                    fontSize: '11px', fontWeight: 600, cursor: 'pointer',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px'
-                  }}
-                >
-                  <Wifi size={12} />
-                  <span>Wi-Fi (Studio)</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setLinkMode('local')}
-                  style={{
-                    flex: 1, padding: '6px 6px', borderRadius: '6px', border: 'none',
-                    background: linkMode === 'local' ? '#1e293b' : 'transparent',
-                    color: linkMode === 'local' ? '#cbd5e1' : '#94a3b8',
-                    fontSize: '11px', fontWeight: 600, cursor: 'pointer',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px'
-                  }}
-                >
-                  <span>This PC</span>
-                </button>
-              </div>
-
-              {/* Mode Status Description */}
-              {linkMode === 'online' && (
-                <div style={{ fontSize: '11px', color: '#10b981', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', background: 'rgba(16, 185, 129, 0.08)', padding: '6px 10px', borderRadius: '6px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: tunnelUrl ? '#10b981' : '#f59e0b', display: 'inline-block' }}></span>
-                    {tunnelUrl ? (
-                      <span><strong>Live Mobile Link Active:</strong> Customer mobile 4G/5G par direct open kar sakega.</span>
-                    ) : (
-                      <span>{isTunnelLoading ? 'Connecting live link...' : (tunnelError || 'Generating online link...')}</span>
-                    )}
-                  </div>
-                  <button type="button" onClick={handleStartTunnel} className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: '10px' }}>
-                    ⚡ Reconnect Link
-                  </button>
-                </div>
-              )}
-
-              {linkMode === 'domain' && (
-                <div style={{
-                  background: 'rgba(139, 92, 246, 0.08)', border: '1px solid rgba(139, 92, 246, 0.25)',
-                  padding: '12px', borderRadius: '8px', marginBottom: '10px'
-                }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
-                    <span style={{ fontSize: '12px', fontWeight: 700, color: '#c4b5fd' }}>
-                      🌐 Apna Custom Domain & Web Hosting (Permanent - Never Expires)
+                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981', display: 'inline-block', boxShadow: '0 0 8px rgba(16, 185, 129, 0.6)' }}></span>
+                    <span style={{ fontSize: '11px', color: '#34d399', fontWeight: 700 }}>
+                      Live Mobile &amp; PC Link Ready
                     </span>
                   </div>
-                  <p style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '8px' }}>
-                    Aapka apna domain (jaise <code>https://select.yourdomain.com</code>) yahan enter karein. Isse link kabhi expire nahi hoga aur super fast chalega:
-                  </p>
-
-                  <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
-                    <input
-                      type="text"
-                      placeholder="https://select.yourdomain.com"
-                      value={customDomainUrl}
-                      onChange={e => setCustomDomainUrl(e.target.value)}
-                      style={{
-                        flex: 1, background: '#0e121a', border: '1px solid #2e384d',
-                        borderRadius: '6px', padding: '6px 10px', color: '#fff', fontSize: '12px', outline: 'none'
-                      }}
-                    />
-                    <button
-                      type="button"
-                      onClick={handleSaveDomainSettings}
-                      disabled={isSavingDomain}
-                      className="btn btn-primary"
-                      style={{ padding: '6px 12px', fontSize: '11px', background: '#8b5cf6' }}
-                    >
-                      {isSavingDomain ? 'Saving...' : 'Save Domain'}
-                    </button>
-                  </div>
-
-                  {domainSaveMessage && (
-                    <div style={{ fontSize: '11px', color: '#a78bfa', marginBottom: '8px' }}>
-                      {domainSaveMessage}
-                    </div>
+                  {isTunnelLoading && (
+                    <span style={{ fontSize: '10px', color: '#94a3b8' }}>Refreshing connection...</span>
                   )}
-
-                  {/* Standalone Export Box */}
-                  <div style={{
-                    marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed rgba(139, 92, 246, 0.25)'
-                  }}>
-                    <div style={{ fontSize: '11px', fontWeight: 700, color: '#f3e8ff', marginBottom: '4px' }}>
-                      📦 Export Standalone Gallery (For cPanel / Web Hosting Upload)
-                    </div>
-                    <p style={{ fontSize: '10px', color: '#94a3b8', marginBottom: '8px' }}>
-                      Is folder ko cPanel me <code>public_html/proofing</code> me upload karein. PC band hone par bhi customer mobile par open karke select kar sakta hai!
-                    </p>
-                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-                      <input
-                        type="text"
-                        value={standaloneExportFolder}
-                        onChange={e => setStandaloneExportFolder(e.target.value)}
-                        style={{
-                          flex: 1, background: '#0e121a', border: '1px solid #2e384d',
-                          borderRadius: '6px', padding: '5px 8px', color: '#cbd5e1', fontSize: '11px', outline: 'none'
-                        }}
-                      />
-                      <button
-                        type="button"
-                        onClick={handleSelectStandaloneFolder}
-                        className="btn btn-secondary"
-                        style={{ padding: '5px 10px', fontSize: '11px' }}
-                      >
-                        <FolderOpen size={12} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleExportStandalone}
-                        disabled={isExportingStandalone}
-                        className="btn btn-primary"
-                        style={{ padding: '5px 12px', fontSize: '11px', background: '#10b981' }}
-                      >
-                        {isExportingStandalone ? 'Exporting...' : 'Export HTML Package'}
-                      </button>
-                    </div>
-
-                    {standaloneExportSuccess && (
-                      <div style={{ fontSize: '11px', color: '#34d399', marginTop: '6px' }}>
-                        {standaloneExportSuccess}
-                      </div>
-                    )}
-                    {standaloneExportError && (
-                      <div style={{ fontSize: '11px', color: '#f87171', marginTop: '6px' }}>
-                        {standaloneExportError}
-                      </div>
-                    )}
-                  </div>
                 </div>
-              )}
 
-              {linkMode === 'wifi' && (
-                <div style={{ fontSize: '11px', color: '#60a5fa', marginBottom: '8px', background: 'rgba(59, 130, 246, 0.08)', padding: '5px 10px', borderRadius: '6px' }}>
-                  📶 <strong>Studio Wi-Fi Link ({localIp}):</strong> Mobile aur PC dono ek hi Wi-Fi network par hone chahiye.
+                <div style={{
+                  display: 'flex', gap: '8px', background: '#0a0d14', padding: '8px 12px',
+                  borderRadius: '6px', border: '1px solid #1e2638', alignItems: 'center'
+                }}>
+                  <input
+                    type="text"
+                    readOnly
+                    value={getFullShareUrl(activeGallery.gallery_uuid, undefined, autoUnlockLink)}
+                    style={{
+                      flex: 1, background: 'transparent', border: 'none', color: '#60a5fa',
+                      fontSize: '12.5px', outline: 'none', fontFamily: 'monospace', fontWeight: 500
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleCopyLink(getFullShareUrl(activeGallery.gallery_uuid, undefined, autoUnlockLink))}
+                    className="btn btn-primary"
+                    style={{ padding: '5px 14px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '5px', background: copied ? '#10b981' : '#2563eb' }}
+                  >
+                    {copied ? <Check size={13} color="#fff" /> : <Copy size={13} />}
+                    {copied ? 'Copied!' : 'Copy Link'}
+                  </button>
                 </div>
-              )}
-
-              <div style={{
-                display: 'flex', gap: '8px', background: '#0a0d14', padding: '8px 12px',
-                borderRadius: '8px', border: '1px solid #1e2638', alignItems: 'center', marginBottom: '12px'
-              }}>
-                <input
-                  type="text"
-                  readOnly
-                  value={getFullShareUrl(activeGallery.gallery_uuid, linkMode, autoUnlockLink)}
-                  style={{
-                    flex: 1, background: 'transparent', border: 'none', color: '#60a5fa',
-                    fontSize: '12px', outline: 'none', fontFamily: 'monospace'
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={() => handleCopyLink(getFullShareUrl(activeGallery.gallery_uuid, linkMode, autoUnlockLink))}
-                  className="btn btn-secondary"
-                  style={{ padding: '4px 10px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}
-                >
-                  {copied ? <Check size={13} color="#10b981" /> : <Copy size={13} />}
-                  {copied ? 'Copied' : 'Copy'}
-                </button>
               </div>
 
-              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+              {/* Action Buttons: WhatsApp Share & Preview */}
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '12px' }}>
                 <button
                   type="button"
                   onClick={handleShareWhatsApp}
                   style={{
-                    flex: 1, padding: '8px 14px', background: '#25d366', color: '#fff',
-                    border: 'none', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
-                    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px'
+                    flex: 1, padding: '10px 14px', background: 'linear-gradient(135deg, #25d366, #128c7e)', color: '#fff',
+                    border: 'none', borderRadius: '8px', fontSize: '12.5px', fontWeight: 700,
+                    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+                    boxShadow: '0 4px 12px rgba(37, 211, 102, 0.25)'
                   }}
                 >
-                  <Send size={13} /> Share on WhatsApp
+                  <Send size={14} /> WhatsApp par bhejein
                 </button>
                 <button
                   type="button"
                   onClick={() => window.open(getFullShareUrl(activeGallery.gallery_uuid, 'local', true), '_blank')}
                   className="btn btn-secondary"
-                  style={{ padding: '8px 14px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                  style={{ padding: '10px 14px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}
                 >
-                  <ExternalLink size={13} /> Preview Gallery
+                  <ExternalLink size={13} /> Open Gallery
                 </button>
               </div>
+
 
               <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '10px', display: 'flex', gap: '16px' }}>
                 <span>Photos: <strong>{activeGallery.total_photos}</strong></span>
@@ -827,6 +671,61 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
               </button>
             </div>
           </form>
+
+          {/* Optional Admin Master Domain Setting (Hidden by default for regular users) */}
+          <div style={{ marginTop: '16px', paddingTop: '10px', borderTop: '1px solid #1a202c' }}>
+            <button
+              type="button"
+              onClick={() => setShowAdminDomainSetup(!showAdminDomainSetup)}
+              style={{
+                background: 'none', border: 'none', color: '#64748b', fontSize: '11px',
+                cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '5px', padding: 0
+              }}
+            >
+              <Settings size={12} />
+              <span>{showAdminDomainSetup ? 'Hide Master Domain Setting' : '⚙️ Master Hosting Domain (Admin Only)'}</span>
+            </button>
+
+            {showAdminDomainSetup && (
+              <div style={{
+                marginTop: '10px', padding: '12px', background: 'rgba(15, 23, 42, 0.8)',
+                borderRadius: '8px', border: '1px solid #1e293b'
+              }}>
+                <div style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8', marginBottom: '6px' }}>
+                  Apna Master Hosting URL (e.g. <code>https://yourdomain.com/album</code>):
+                </div>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  <input
+                    type="text"
+                    placeholder="https://yourdomain.com/album"
+                    value={customDomainUrl}
+                    onChange={e => setCustomDomainUrl(e.target.value)}
+                    style={{
+                      flex: 1, background: '#0a0d14', border: '1px solid #28334a',
+                      borderRadius: '6px', padding: '6px 10px', color: '#fff', fontSize: '12px', outline: 'none'
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={handleSaveDomainSettings}
+                    disabled={isSavingDomain}
+                    className="btn btn-primary"
+                    style={{ padding: '6px 14px', fontSize: '11px' }}
+                  >
+                    {isSavingDomain ? 'Saving...' : 'Save URL'}
+                  </button>
+                </div>
+                {domainSaveMessage && (
+                  <div style={{ fontSize: '11px', color: '#34d399', marginTop: '6px' }}>
+                    {domainSaveMessage}
+                  </div>
+                )}
+                <p style={{ fontSize: '10px', color: '#64748b', margin: '6px 0 0' }}>
+                  Yahan domain save karne ke baad sabhi users ke client links automatically aapke hosting domain par banenge.
+                </p>
+              </div>
+            )}
+          </div>
         </div>
       </div>
     </div>

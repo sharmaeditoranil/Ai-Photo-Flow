@@ -409,10 +409,19 @@ class BatchManager:
         conn = get_connection()
         cursor = conn.cursor()
 
-        # Query photos to export
+        # Query photos to export (including client_selection from photos or client_gallery_photos)
         cursor.execute("""
-        SELECT id, filename, file_path, ai_recommendation, user_selection, edit_params, is_edited
-        FROM photos WHERE project_id = ?
+        SELECT p.id, p.filename, p.file_path, p.ai_recommendation, p.user_selection, p.edit_params, p.is_edited,
+               COALESCE(NULLIF(p.client_selection, ''), gp.client_selection, 'UNRATED') as client_selection,
+               COALESCE(NULLIF(p.client_note, ''), gp.client_note, '') as client_note
+        FROM photos p
+        LEFT JOIN (
+            SELECT photo_id, client_selection, client_note
+            FROM client_gallery_photos
+            WHERE client_selection = 'SELECTED'
+            GROUP BY photo_id
+        ) gp ON p.id = gp.photo_id
+        WHERE p.project_id = ?
         """, (project_id,))
         all_photos = [dict(r) for r in cursor.fetchall()]
         conn.close()
@@ -424,9 +433,12 @@ class BatchManager:
         export_queue = []
         for p in all_photos:
             effective_choice = p["user_selection"] if p["user_selection"] != "UNRATED" else p["ai_recommendation"]
-            is_client_selected = p.get("client_selection") == "SELECTED"
-            if effective_choice in categories or ("CLIENT_SELECTED" in categories and is_client_selected):
-                export_queue.append((p, "CLIENT_SELECTED" if is_client_selected else effective_choice))
+            is_client_selected = (p.get("client_selection") or "").upper() == "SELECTED"
+            
+            if "CLIENT_SELECTED" in categories and is_client_selected:
+                export_queue.append((p, "CLIENT_SELECTED"))
+            elif effective_choice in categories:
+                export_queue.append((p, effective_choice))
 
         total = len(export_queue)
         job_id = self.create_job(project_id, "EXPORT", total)
@@ -473,7 +485,9 @@ class BatchManager:
                     src_path = p["file_path"]
                     base_name, _ = os.path.splitext(p["filename"])
 
-                    if choice in ("BEST", "SELECTED"):
+                    if choice == "CLIENT_SELECTED":
+                        subfolder = "Customer-Selected"
+                    elif choice in ("BEST", "SELECTED"):
                         subfolder = "AI-Edited" if p.get("is_edited") else "AI-Selected"
                     elif choice == "REJECT":
                         subfolder = "Rejected"

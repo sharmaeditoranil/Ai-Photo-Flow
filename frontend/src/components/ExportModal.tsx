@@ -19,6 +19,7 @@ interface ExportModalProps {
   defaultFolder: string;
   projectId?: number;
   clientSelectedCount?: number;
+  activeCategory?: string;
 }
 
 export const ExportModal: React.FC<ExportModalProps> = ({
@@ -28,6 +29,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   defaultFolder,
   projectId,
   clientSelectedCount = 0,
+  activeCategory = 'ALL',
 }) => {
   const [outputFolder, setOutputFolder] = useState<string>('');
   const [quality, setQuality] = useState<number>(92);
@@ -65,8 +67,35 @@ export const ExportModal: React.FC<ExportModalProps> = ({
       setActiveJobId(null);
       setActiveJob(null);
       setExportError(null);
+
+      // Smart preselection based on currently active section
+      if (activeCategory === 'CLIENT_SELECTED') {
+        setIncludeClientSelected(true);
+        setIncludeBest(false);
+        setIncludeSelected(false);
+        setIncludeSimilar(false);
+        setIncludeRejected(false);
+      } else if (activeCategory === 'BEST') {
+        setIncludeBest(true);
+        setIncludeSelected(false);
+        setIncludeClientSelected(false);
+        setIncludeSimilar(false);
+        setIncludeRejected(false);
+      } else if (activeCategory === 'SELECTED') {
+        setIncludeSelected(true);
+        setIncludeBest(false);
+        setIncludeClientSelected(false);
+        setIncludeSimilar(false);
+        setIncludeRejected(false);
+      } else {
+        setIncludeBest(true);
+        setIncludeSelected(true);
+        setIncludeClientSelected(clientSelectedCount > 0);
+        setIncludeSimilar(false);
+        setIncludeRejected(false);
+      }
     }
-  }, [isOpen, defaultFolder]);
+  }, [isOpen, defaultFolder, activeCategory, clientSelectedCount]);
 
   // Poll export job while modal is open and job is active
   useEffect(() => {
