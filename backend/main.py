@@ -107,6 +107,8 @@ class SettingsRequest(BaseModel):
     razorpay_key_id: Optional[str] = ""
     razorpay_key_secret: Optional[str] = ""
     razorpay_enabled: Optional[bool] = True
+    custom_domain_url: Optional[str] = ""
+    cloudflare_tunnel_token: Optional[str] = ""
 
 class ExportRequest(BaseModel):
     output_folder: str
@@ -1209,6 +1211,15 @@ def get_proofing_preview(gallery_uuid: str, photo_id: int):
         raise HTTPException(status_code=404, detail="Preview not found")
     return FileResponse(preview_file, media_type="image/webp", headers={"Cache-Control": "public, max-age=86400"})
 
+@app.get("/api/proofing/thumb/{gallery_uuid}/{photo_id}")
+def get_proofing_thumb(gallery_uuid: str, photo_id: int):
+    thumb_file = proofing_service.ensure_single_thumb(gallery_uuid, photo_id)
+    if not thumb_file or not os.path.exists(thumb_file):
+        thumb_file = proofing_service.ensure_single_preview(gallery_uuid, photo_id)
+    if not thumb_file or not os.path.exists(thumb_file):
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+    return FileResponse(thumb_file, media_type="image/webp", headers={"Cache-Control": "public, max-age=86400"})
+
 @app.post("/api/proofing/export-selected")
 def export_client_selected_photos(req: ExportClientSelectedRequest):
     try:
@@ -1216,6 +1227,21 @@ def export_client_selected_photos(req: ExportClientSelectedRequest):
             project_id=req.project_id,
             destination_folder=req.destination_folder,
             gallery_uuid=req.gallery_uuid
+        )
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+class ExportStandaloneGalleryRequest(BaseModel):
+    gallery_uuid: str
+    destination_folder: str
+
+@app.post("/api/proofing/export-standalone")
+def export_standalone_web_gallery(req: ExportStandaloneGalleryRequest):
+    try:
+        res = proofing_service.export_standalone_gallery(
+            gallery_uuid=req.gallery_uuid,
+            destination_folder=req.destination_folder
         )
         return res
     except Exception as e:

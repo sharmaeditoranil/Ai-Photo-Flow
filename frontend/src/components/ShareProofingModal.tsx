@@ -1,5 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { Share2, X, Copy, Check, ExternalLink, ShieldCheck, Lock, Smartphone, RefreshCw, Send, Globe, Wifi, Radio } from 'lucide-react';
+import {
+  Share2, X, Copy, Check, ExternalLink, ShieldCheck, Lock,
+  Smartphone, RefreshCw, Send, Globe, Wifi, Radio, Server,
+  FolderOpen, HardDrive, Sparkles
+} from 'lucide-react';
 import { api } from '../api';
 import { Project, Photo, ClientGallery, BatchJob } from '../types';
 
@@ -35,11 +39,23 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
   const [existingGalleries, setExistingGalleries] = useState<ClientGallery[]>([]);
 
   // Mobile & Tunnel state
-  const [linkMode, setLinkMode] = useState<'online' | 'wifi' | 'local'>('online');
+  const [linkMode, setLinkMode] = useState<'online' | 'domain' | 'wifi' | 'local'>('online');
   const [tunnelUrl, setTunnelUrl] = useState<string | null>(null);
   const [localIp, setLocalIp] = useState<string>('127.0.0.1');
   const [isTunnelLoading, setIsTunnelLoading] = useState(false);
   const [tunnelError, setTunnelError] = useState<string | null>(null);
+
+  // Custom Domain & Hosting State
+  const [customDomainUrl, setCustomDomainUrl] = useState<string>('');
+  const [cfToken, setCfToken] = useState<string>('');
+  const [isSavingDomain, setIsSavingDomain] = useState<boolean>(false);
+  const [domainSaveMessage, setDomainSaveMessage] = useState<string | null>(null);
+
+  // Standalone Hosting Export state
+  const [standaloneExportFolder, setStandaloneExportFolder] = useState<string>('/Users/anilsharma/Desktop/Client_Proofing_Web');
+  const [isExportingStandalone, setIsExportingStandalone] = useState<boolean>(false);
+  const [standaloneExportSuccess, setStandaloneExportSuccess] = useState<string | null>(null);
+  const [standaloneExportError, setStandaloneExportError] = useState<string | null>(null);
 
   useEffect(() => {
     if (project && isOpen) {
@@ -54,6 +70,12 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
     try {
       const info = await api.getNetworkInfo();
       if (info.local_ip) setLocalIp(info.local_ip);
+      if ((info as any).custom_domain_url) {
+        setCustomDomainUrl((info as any).custom_domain_url);
+        if ((info as any).custom_domain_url.trim()) {
+          setLinkMode('domain');
+        }
+      }
       if (info.url) {
         setTunnelUrl(info.url);
       } else {
@@ -80,6 +102,51 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
       if (linkMode === 'online') setLinkMode('wifi');
     } finally {
       setIsTunnelLoading(false);
+    }
+  };
+
+  const handleSaveDomainSettings = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    setIsSavingDomain(true);
+    setDomainSaveMessage(null);
+    try {
+      await api.saveSettings({
+        custom_domain_url: customDomainUrl.trim(),
+        cloudflare_tunnel_token: cfToken.trim()
+      });
+      setDomainSaveMessage('✅ Custom Domain saved! Links updated.');
+      await handleStartTunnel();
+      setTimeout(() => setDomainSaveMessage(null), 4000);
+    } catch (err: any) {
+      setDomainSaveMessage(`❌ Error: ${err.message}`);
+    } finally {
+      setIsSavingDomain(false);
+    }
+  };
+
+  const handleSelectStandaloneFolder = async () => {
+    try {
+      if ((window as any).electronAPI && (window as any).electronAPI.selectFolder) {
+        const path = await (window as any).electronAPI.selectFolder();
+        if (path) setStandaloneExportFolder(path);
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleExportStandalone = async () => {
+    if (!activeGallery) return;
+    setIsExportingStandalone(true);
+    setStandaloneExportSuccess(null);
+    setStandaloneExportError(null);
+    try {
+      const res = await api.exportStandaloneGallery(activeGallery.gallery_uuid, standaloneExportFolder);
+      setStandaloneExportSuccess(`✅ Exported ${res.total_photos} photos to ${res.destination_folder}! You can now upload this folder to your cPanel / hosting.`);
+    } catch (err: any) {
+      setStandaloneExportError(err.message || 'Export failed');
+    } finally {
+      setIsExportingStandalone(false);
     }
   };
 
@@ -162,9 +229,16 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
     }
   };
 
-  const getBaseOrigin = (mode: 'online' | 'wifi' | 'local' = linkMode) => {
+  const getBaseOrigin = (mode: 'online' | 'domain' | 'wifi' | 'local' = linkMode) => {
+    if (mode === 'domain' && customDomainUrl && customDomainUrl.trim()) {
+      let d = customDomainUrl.trim();
+      if (!d.startsWith('http://') && !d.startsWith('https://')) {
+        d = `https://${d}`;
+      }
+      return d.replace(/\/+$/, '');
+    }
     if (mode === 'online' && tunnelUrl) {
-      return tunnelUrl;
+      return tunnelUrl.replace(/\/+$/, '');
     }
     if (mode === 'wifi' && localIp && localIp !== '127.0.0.1') {
       return `http://${localIp}:8000`;
@@ -174,7 +248,7 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
 
   const getFullShareUrl = (
     galleryUuid: string,
-    mode: 'online' | 'wifi' | 'local' = linkMode,
+    mode: 'online' | 'domain' | 'wifi' | 'local' = linkMode,
     withPin: boolean = autoUnlockLink
   ) => {
     const origin = getBaseOrigin(mode);
@@ -374,39 +448,53 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
                   type="button"
                   onClick={() => setLinkMode('online')}
                   style={{
-                    flex: 1, padding: '6px 8px', borderRadius: '6px', border: 'none',
+                    flex: 1, padding: '6px 6px', borderRadius: '6px', border: 'none',
                     background: linkMode === 'online' ? '#2563eb' : 'transparent',
                     color: linkMode === 'online' ? '#fff' : '#94a3b8',
                     fontSize: '11px', fontWeight: 600, cursor: 'pointer',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px'
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px'
                   }}
                 >
                   <Globe size={12} />
-                  <span>Mobile (Online / 4G)</span>
+                  <span>Cloudflare Link</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setLinkMode('domain')}
+                  style={{
+                    flex: 1, padding: '6px 6px', borderRadius: '6px', border: 'none',
+                    background: linkMode === 'domain' ? '#8b5cf6' : 'transparent',
+                    color: linkMode === 'domain' ? '#fff' : '#94a3b8',
+                    fontSize: '11px', fontWeight: 600, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px'
+                  }}
+                >
+                  <Server size={12} />
+                  <span>Apna Domain / Hosting</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setLinkMode('wifi')}
                   style={{
-                    flex: 1, padding: '6px 8px', borderRadius: '6px', border: 'none',
+                    flex: 1, padding: '6px 6px', borderRadius: '6px', border: 'none',
                     background: linkMode === 'wifi' ? '#1e293b' : 'transparent',
                     color: linkMode === 'wifi' ? '#60a5fa' : '#94a3b8',
                     fontSize: '11px', fontWeight: 600, cursor: 'pointer',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px'
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px'
                   }}
                 >
                   <Wifi size={12} />
-                  <span>Same Wi-Fi (Studio)</span>
+                  <span>Wi-Fi (Studio)</span>
                 </button>
                 <button
                   type="button"
                   onClick={() => setLinkMode('local')}
                   style={{
-                    flex: 1, padding: '6px 8px', borderRadius: '6px', border: 'none',
+                    flex: 1, padding: '6px 6px', borderRadius: '6px', border: 'none',
                     background: linkMode === 'local' ? '#1e293b' : 'transparent',
                     color: linkMode === 'local' ? '#cbd5e1' : '#94a3b8',
                     fontSize: '11px', fontWeight: 600, cursor: 'pointer',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '5px'
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px'
                   }}
                 >
                   <span>This PC</span>
@@ -415,20 +503,113 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
 
               {/* Mode Status Description */}
               {linkMode === 'online' && (
-                <div style={{ fontSize: '11px', color: '#10b981', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', background: 'rgba(16, 185, 129, 0.08)', padding: '5px 10px', borderRadius: '6px' }}>
+                <div style={{ fontSize: '11px', color: '#10b981', display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '8px', background: 'rgba(16, 185, 129, 0.08)', padding: '6px 10px', borderRadius: '6px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                     <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: tunnelUrl ? '#10b981' : '#f59e0b', display: 'inline-block' }}></span>
                     {tunnelUrl ? (
-                      <span><strong>Live Mobile Link:</strong> Mobile par 4G/5G/Wi-Fi kahin se bhi direct chalega!</span>
+                      <span><strong>Live Mobile Link Active:</strong> Customer mobile 4G/5G par direct open kar sakega.</span>
                     ) : (
-                      <span>{isTunnelLoading ? 'Connecting secure online link...' : (tunnelError || 'Generating online link...')}</span>
+                      <span>{isTunnelLoading ? 'Connecting live link...' : (tunnelError || 'Generating online link...')}</span>
                     )}
                   </div>
-                  {!tunnelUrl && !isTunnelLoading && (
-                    <button type="button" onClick={handleStartTunnel} className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: '10px' }}>
-                      ⚡ Connect
+                  <button type="button" onClick={handleStartTunnel} className="btn btn-secondary" style={{ padding: '2px 8px', fontSize: '10px' }}>
+                    ⚡ Reconnect Link
+                  </button>
+                </div>
+              )}
+
+              {linkMode === 'domain' && (
+                <div style={{
+                  background: 'rgba(139, 92, 246, 0.08)', border: '1px solid rgba(139, 92, 246, 0.25)',
+                  padding: '12px', borderRadius: '8px', marginBottom: '10px'
+                }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '6px' }}>
+                    <span style={{ fontSize: '12px', fontWeight: 700, color: '#c4b5fd' }}>
+                      🌐 Apna Custom Domain & Web Hosting (Permanent - Never Expires)
+                    </span>
+                  </div>
+                  <p style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '8px' }}>
+                    Aapka apna domain (jaise <code>https://select.yourdomain.com</code>) yahan enter karein. Isse link kabhi expire nahi hoga aur super fast chalega:
+                  </p>
+
+                  <div style={{ display: 'flex', gap: '8px', marginBottom: '8px' }}>
+                    <input
+                      type="text"
+                      placeholder="https://select.yourdomain.com"
+                      value={customDomainUrl}
+                      onChange={e => setCustomDomainUrl(e.target.value)}
+                      style={{
+                        flex: 1, background: '#0e121a', border: '1px solid #2e384d',
+                        borderRadius: '6px', padding: '6px 10px', color: '#fff', fontSize: '12px', outline: 'none'
+                      }}
+                    />
+                    <button
+                      type="button"
+                      onClick={handleSaveDomainSettings}
+                      disabled={isSavingDomain}
+                      className="btn btn-primary"
+                      style={{ padding: '6px 12px', fontSize: '11px', background: '#8b5cf6' }}
+                    >
+                      {isSavingDomain ? 'Saving...' : 'Save Domain'}
                     </button>
+                  </div>
+
+                  {domainSaveMessage && (
+                    <div style={{ fontSize: '11px', color: '#a78bfa', marginBottom: '8px' }}>
+                      {domainSaveMessage}
+                    </div>
                   )}
+
+                  {/* Standalone Export Box */}
+                  <div style={{
+                    marginTop: '10px', paddingTop: '10px', borderTop: '1px dashed rgba(139, 92, 246, 0.25)'
+                  }}>
+                    <div style={{ fontSize: '11px', fontWeight: 700, color: '#f3e8ff', marginBottom: '4px' }}>
+                      📦 Export Standalone Gallery (For cPanel / Web Hosting Upload)
+                    </div>
+                    <p style={{ fontSize: '10px', color: '#94a3b8', marginBottom: '8px' }}>
+                      Is folder ko cPanel me <code>public_html/proofing</code> me upload karein. PC band hone par bhi customer mobile par open karke select kar sakta hai!
+                    </p>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                      <input
+                        type="text"
+                        value={standaloneExportFolder}
+                        onChange={e => setStandaloneExportFolder(e.target.value)}
+                        style={{
+                          flex: 1, background: '#0e121a', border: '1px solid #2e384d',
+                          borderRadius: '6px', padding: '5px 8px', color: '#cbd5e1', fontSize: '11px', outline: 'none'
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={handleSelectStandaloneFolder}
+                        className="btn btn-secondary"
+                        style={{ padding: '5px 10px', fontSize: '11px' }}
+                      >
+                        <FolderOpen size={12} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleExportStandalone}
+                        disabled={isExportingStandalone}
+                        className="btn btn-primary"
+                        style={{ padding: '5px 12px', fontSize: '11px', background: '#10b981' }}
+                      >
+                        {isExportingStandalone ? 'Exporting...' : 'Export HTML Package'}
+                      </button>
+                    </div>
+
+                    {standaloneExportSuccess && (
+                      <div style={{ fontSize: '11px', color: '#34d399', marginTop: '6px' }}>
+                        {standaloneExportSuccess}
+                      </div>
+                    )}
+                    {standaloneExportError && (
+                      <div style={{ fontSize: '11px', color: '#f87171', marginTop: '6px' }}>
+                        {standaloneExportError}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 

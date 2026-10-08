@@ -513,6 +513,19 @@ export const api = {
   async stopPublicTunnel(): Promise<{ status: string }> {
     const res = await fetch(`${API_BASE}/proofing/tunnel/stop`, { method: 'POST' });
     return res.json();
+  },
+
+  async exportStandaloneGallery(galleryUuid: string, destinationFolder: string): Promise<any> {
+    const res = await fetch(`${API_BASE}/proofing/export-standalone`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ gallery_uuid: galleryUuid, destination_folder: destinationFolder })
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || 'Failed to export standalone gallery');
+    }
+    return res.json();
   }
 };
 

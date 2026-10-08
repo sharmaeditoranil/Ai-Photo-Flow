@@ -451,217 +451,217 @@ def apply_edit_pipeline(
         except Exception:
             pass
 
-    # 6. Retouch4me-Style AI Facial Blemish Healing & Manual Spot Brush
+    # 6. Retouch4me-Style AI Facial Blemish Healing & Manual Spot Brush (Ultra-Fast Localized Pipeline)
     heal_spots = getattr(params, 'heal_spots', []) or []
     auto_blemish = float(getattr(params, 'auto_blemish', 0.0) or 0.0)
 
     if (heal_spots and len(heal_spots) > 0) or auto_blemish > 1.0:
         try:
             h, w = img.shape[:2]
-            img_u8 = np.clip(img, 0, 255).astype(np.uint8)
-            combined_heal_mask = np.zeros((h, w), dtype=np.uint8)
 
-            # A. Manual Spot Healing Brush (User clicks directly on specific blemish)
+            # A. Manual Spot Healing Brush (Ultra-Fast Local Patch Inpainting)
             if heal_spots and len(heal_spots) > 0:
                 for spot in heal_spots:
                     try:
                         cx = int(np.clip(float(spot.get("x", 0.5)) * w, 0, w - 1))
                         cy = int(np.clip(float(spot.get("y", 0.5)) * h, 0, h - 1))
-                        # Precision compact radius: default 0.010 (~10px), minimum 3px
                         rad = max(3, int(float(spot.get("radius", 0.010)) * min(h, w)))
-                        cv2.circle(combined_heal_mask, (cx, cy), rad, 255, -1)
+                        pad = rad * 3
+                        sx1, sy1 = max(0, cx - pad), max(0, cy - pad)
+                        sx2, sy2 = min(w, cx + pad), min(h, cy + pad)
+                        if sx2 > sx1 and sy2 > sy1:
+                            patch = np.clip(img[sy1:sy2, sx1:sx2], 0, 255).astype(np.uint8)
+                            patch_mask = np.zeros((sy2 - sy1, sx2 - sx1), dtype=np.uint8)
+                            cv2.circle(patch_mask, (cx - sx1, cy - sy1), rad, 255, -1)
+                            patch_inpainted = cv2.inpaint(patch, patch_mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
+                            img[sy1:sy2, sx1:sx2] = patch_inpainted.astype(np.float32)
                     except Exception:
                         pass
 
-            # B. Retouch4me-Style Multi-Scale AI Face Blemish Auto-Clean
-            # Professional frequency-separated blemish isolation (pores, nose, eyes, lips 100% protected)
+            # B. Retouch4me-Style Multi-Scale AI Face Blemish Auto-Clean (Localized to Face Crops)
             if auto_blemish > 1.0:
                 try:
                     f_boxes = detected_face_boxes
                     if not f_boxes:
-                        f_metrics = face_detector.detect(img_u8)
-                        if f_metrics and f_metrics.bounding_boxes:
-                            f_boxes = f_metrics.bounding_boxes
+                        # Fast proxy face detect if not already available
+                        proxy_s = 800.0 / float(max(h, w)) if max(h, w) > 1000 else 1.0
+                        proxy_u8 = cv2.resize(np.clip(img, 0, 255).astype(np.uint8), (int(w * proxy_s), int(h * proxy_s)), interpolation=cv2.INTER_AREA) if proxy_s < 1.0 else np.clip(img, 0, 255).astype(np.uint8)
+                        f_m = face_detector.detect(proxy_u8)
+                        if f_m and f_m.bounding_boxes:
+                            inv_s = 1.0 / proxy_s
+                            f_boxes = [
+                                {
+                                    "x": int(b["x"] * inv_s),
+                                    "y": int(b["y"] * inv_s),
+                                    "w": int(b["w"] * inv_s),
+                                    "h": int(b["h"] * inv_s)
+                                }
+                                for b in f_m.bounding_boxes
+                            ]
 
                     if f_boxes:
-                        ycrcb = cv2.cvtColor(img_u8, cv2.COLOR_RGB2YCrCb)
-                        Y_c = ycrcb[:, :, 0]
-                        Cr_c = ycrcb[:, :, 1]
-                        Cb_c = ycrcb[:, :, 2]
-                        gray = cv2.cvtColor(img_u8, cv2.COLOR_RGB2GRAY)
-                        edge_mag = cv2.magnitude(cv2.Sobel(gray, cv2.CV_32F, 1, 0), cv2.Sobel(gray, cv2.CV_32F, 0, 1))
-
-                        # Redness channel (R - (G+B)/2): extremely sensitive for acne & inflamed spots
-                        r_ch = img_u8[:, :, 0].astype(np.int16)
-                        g_ch = img_u8[:, :, 1].astype(np.int16)
-                        b_ch = img_u8[:, :, 2].astype(np.int16)
-                        redness = np.clip(r_ch - ((g_ch + b_ch) // 2) + 128, 0, 255).astype(np.uint8)
-
-                        # Multi-Scale Morphological Top-Hat & Black-Hat (13px for micro, 23px for mid, 35px for large)
-                        k_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
-                        k_mid = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (23, 23))
-                        k_large = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (35, 35))
-
-                        tophat_cr_s = cv2.morphologyEx(Cr_c, cv2.MORPH_TOPHAT, k_small)
-                        tophat_cr_m = cv2.morphologyEx(Cr_c, cv2.MORPH_TOPHAT, k_mid)
-                        tophat_cr_l = cv2.morphologyEx(Cr_c, cv2.MORPH_TOPHAT, k_large)
-                        tophat_cr = np.maximum(np.maximum(tophat_cr_s, tophat_cr_m), tophat_cr_l)
-
-                        tophat_rg_s = cv2.morphologyEx(redness, cv2.MORPH_TOPHAT, k_small)
-                        tophat_rg_m = cv2.morphologyEx(redness, cv2.MORPH_TOPHAT, k_mid)
-                        tophat_rg_l = cv2.morphologyEx(redness, cv2.MORPH_TOPHAT, k_large)
-                        tophat_rg = np.maximum(np.maximum(tophat_rg_s, tophat_rg_m), tophat_rg_l)
-
-                        blackhat_y_s = cv2.morphologyEx(Y_c, cv2.MORPH_BLACKHAT, k_small)
-                        blackhat_y_m = cv2.morphologyEx(Y_c, cv2.MORPH_BLACKHAT, k_mid)
-                        blackhat_y_l = cv2.morphologyEx(Y_c, cv2.MORPH_BLACKHAT, k_large)
-                        blackhat_y = np.maximum(np.maximum(blackhat_y_s, blackhat_y_m), blackhat_y_l)
-
-                        # Retouch4me High-Sensitivity Dynamic Thresholds
-                        # Scales smoothly with auto_blemish (10 to 100)
                         sens = np.clip(auto_blemish / 100.0, 0.1, 1.0)
                         th_cr = max(3.5, 7.0 - sens * 3.5)
                         th_rg = max(4.0, 8.0 - sens * 4.0)
                         th_y = max(4.5, 8.5 - sens * 4.0)
 
+                        k_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (13, 13))
+                        k_mid = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (23, 23))
+                        k_large = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (35, 35))
+
                         for fb in f_boxes:
                             fx, fy, fw, fh = fb['x'], fb['y'], fb['w'], fb['h']
-                            face_mask = np.zeros((h, w), dtype=np.uint8)
-                            fcx, fcy = int(fx + fw * 0.5), int(fy + fh * 0.52)
+                            pad_x, pad_y = int(fw * 0.08), int(fh * 0.08)
+                            x1, y1 = max(0, fx - pad_x), max(0, fy - pad_y)
+                            x2, y2 = min(w, fx + fw + pad_x), min(h, fy + fh + pad_y)
+                            face_crop = np.clip(img[y1:y2, x1:x2], 0, 255).astype(np.uint8)
+                            ch, cw = face_crop.shape[:2]
+                            if ch < 12 or cw < 12:
+                                continue
 
-                            # 1. Main Face Flesh Zone (cheeks, forehead, chin, temples)
-                            cv2.ellipse(face_mask, (fcx, fcy), (int(fw * 0.44), int(fh * 0.46)), 0, 0, 360, 255, -1)
+                            ycrcb_c = cv2.cvtColor(face_crop, cv2.COLOR_RGB2YCrCb)
+                            Y_c = ycrcb_c[:, :, 0]
+                            Cr_c = ycrcb_c[:, :, 1]
+                            Cb_c = ycrcb_c[:, :, 2]
+                            gray_c = cv2.cvtColor(face_crop, cv2.COLOR_RGB2GRAY)
+                            edge_mag_c = cv2.magnitude(cv2.Sobel(gray_c, cv2.CV_32F, 1, 0), cv2.Sobel(gray_c, cv2.CV_32F, 0, 1))
 
-                            # 2. STRICT NOSE & NOSTRIL EXCLUSION ZONE
-                            # Prevents nose shape deformation and nostril shadow erasure
-                            nose_x1, nose_x2 = int(fcx - fw * 0.13), int(fcx + fw * 0.13)
-                            nose_y1, nose_y2 = int(fy + fh * 0.38), int(fy + fh * 0.72)
-                            face_mask[nose_y1:nose_y2, nose_x1:nose_x2] = 0
+                            r_ch = face_crop[:, :, 0].astype(np.int16)
+                            g_ch = face_crop[:, :, 1].astype(np.int16)
+                            b_ch = face_crop[:, :, 2].astype(np.int16)
+                            redness_c = np.clip(r_ch - ((g_ch + b_ch) // 2) + 128, 0, 255).astype(np.uint8)
 
-                            # 3. STRICT EYES & EYEBROWS EXCLUSION ZONE
-                            # Covers eyebrows from top arches down to below lower eyelid
-                            eye_x1, eye_x2 = int(fcx - fw * 0.38), int(fcx + fw * 0.38)
-                            eye_y1, eye_y2 = int(fy + fh * 0.15), int(fy + fh * 0.45)
-                            face_mask[eye_y1:eye_y2, eye_x1:eye_x2] = 0
+                            tophat_cr_s = cv2.morphologyEx(Cr_c, cv2.MORPH_TOPHAT, k_small)
+                            tophat_cr_m = cv2.morphologyEx(Cr_c, cv2.MORPH_TOPHAT, k_mid)
+                            tophat_cr_l = cv2.morphologyEx(Cr_c, cv2.MORPH_TOPHAT, k_large)
+                            tophat_cr = np.maximum(np.maximum(tophat_cr_s, tophat_cr_m), tophat_cr_l)
 
-                            # 4. STRICT MOUTH & SMILE EXCLUSION ZONE
-                            # Covers upper lip, philtrum, smile corners, teeth, and lower lip
-                            mouth_x1, mouth_x2 = int(fcx - fw * 0.28), int(fcx + fw * 0.28)
-                            mouth_y1, mouth_y2 = int(fy + fh * 0.68), int(fy + fh * 0.90)
-                            face_mask[mouth_y1:mouth_y2, mouth_x1:mouth_x2] = 0
+                            tophat_rg_s = cv2.morphologyEx(redness_c, cv2.MORPH_TOPHAT, k_small)
+                            tophat_rg_m = cv2.morphologyEx(redness_c, cv2.MORPH_TOPHAT, k_mid)
+                            tophat_rg_l = cv2.morphologyEx(redness_c, cv2.MORPH_TOPHAT, k_large)
+                            tophat_rg = np.maximum(np.maximum(tophat_rg_s, tophat_rg_m), tophat_rg_l)
 
-                            # 5. STRICT BINDI / MAANG TIKKA EXCLUSION ZONE
-                            tikka_x1, tikka_x2 = int(fcx - fw * 0.08), int(fcx + fw * 0.08)
-                            tikka_y1, tikka_y2 = int(fy), int(fy + fh * 0.26)
-                            face_mask[tikka_y1:tikka_y2, tikka_x1:tikka_x2] = 0
+                            blackhat_y_s = cv2.morphologyEx(Y_c, cv2.MORPH_BLACKHAT, k_small)
+                            blackhat_y_m = cv2.morphologyEx(Y_c, cv2.MORPH_BLACKHAT, k_mid)
+                            blackhat_y_l = cv2.morphologyEx(Y_c, cv2.MORPH_BLACKHAT, k_large)
+                            blackhat_y = np.maximum(np.maximum(blackhat_y_s, blackhat_y_m), blackhat_y_l)
 
-                            # 6. Hair & Stubble Protection: Exclude pixels with low luminance or high edge gradient
-                            safe_skin = (face_mask > 0) & (Cr_c >= 122) & (Cr_c <= 218) & (Cb_c >= 70) & (Cb_c <= 140) & (Y_c >= 72) & (Y_c <= 250) & (edge_mag < 42.0)
+                            face_mask_c = np.zeros((ch, cw), dtype=np.uint8)
+                            fcx, fcy = int((fx - x1) + fw * 0.5), int((fy - y1) + fh * 0.52)
+                            cv2.ellipse(face_mask_c, (fcx, fcy), (int(fw * 0.44), int(fh * 0.46)), 0, 0, 360, 255, -1)
+
+                            # Strict feature protection zones
+                            nose_x1, nose_x2 = max(0, int(fcx - fw * 0.13)), min(cw, int(fcx + fw * 0.13))
+                            nose_y1, nose_y2 = max(0, int((fy - y1) + fh * 0.38)), min(ch, int((fy - y1) + fh * 0.72))
+                            face_mask_c[nose_y1:nose_y2, nose_x1:nose_x2] = 0
+
+                            eye_x1, eye_x2 = max(0, int(fcx - fw * 0.38)), min(cw, int(fcx + fw * 0.38))
+                            eye_y1, eye_y2 = max(0, int((fy - y1) + fh * 0.15)), min(ch, int((fy - y1) + fh * 0.45))
+                            face_mask_c[eye_y1:eye_y2, eye_x1:eye_x2] = 0
+
+                            mouth_x1, mouth_x2 = max(0, int(fcx - fw * 0.28)), min(cw, int(fcx + fw * 0.28))
+                            mouth_y1, mouth_y2 = max(0, int((fy - y1) + fh * 0.68)), min(ch, int((fy - y1) + fh * 0.90))
+                            face_mask_c[mouth_y1:mouth_y2, mouth_x1:mouth_x2] = 0
+
+                            tikka_x1, tikka_x2 = max(0, int(fcx - fw * 0.08)), min(cw, int(fcx + fw * 0.08))
+                            tikka_y1, tikka_y2 = max(0, int(fy - y1)), min(ch, int((fy - y1) + fh * 0.26))
+                            face_mask_c[tikka_y1:tikka_y2, tikka_x1:tikka_x2] = 0
+
+                            safe_skin = (face_mask_c > 0) & (Cr_c >= 122) & (Cr_c <= 218) & (Cb_c >= 70) & (Cb_c <= 140) & (Y_c >= 72) & (Y_c <= 250) & (edge_mag_c < 42.0)
                             cand = safe_skin & ((tophat_cr > th_cr) | (tophat_rg > th_rg) | (blackhat_y > th_y))
 
-                            # Compact pimple geometry: strictly up to 28-30px max (never facial bone structures)
                             max_diam = min(28, max(10, int(fw * 0.07)))
                             max_area = int(1.4 * np.pi * (max_diam / 2.0) ** 2)
                             min_diam = max(3, int(fw * 0.003))
                             min_area = max(5, int(np.pi * (min_diam / 2.0) ** 2))
 
                             num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(cand.astype(np.uint8) * 255)
+                            crop_heal_mask = np.zeros((ch, cw), dtype=np.uint8)
                             for i in range(1, num_labels):
                                 area = stats[i, cv2.CC_STAT_AREA]
-                                cw = stats[i, cv2.CC_STAT_WIDTH]
-                                ch = stats[i, cv2.CC_STAT_HEIGHT]
-                                aspect = max(cw, ch) / max(1, min(cw, ch))
-                                pimple_size = max(cw, ch)
-
-                                # Compact pimple geometry: rejects hair strands or linear creases
+                                cw_box = stats[i, cv2.CC_STAT_WIDTH]
+                                ch_box = stats[i, cv2.CC_STAT_HEIGHT]
+                                aspect = max(cw_box, ch_box) / max(1, min(cw_box, ch_box))
+                                pimple_size = max(cw_box, ch_box)
                                 if min_area <= area <= max_area and pimple_size <= max_diam and aspect < 2.0:
-                                    combined_heal_mask[labels == i] = 255
+                                    crop_heal_mask[labels == i] = 255
+
+                            if np.any(crop_heal_mask > 0):
+                                kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+                                dilated_mask = cv2.dilate(crop_heal_mask, kernel_dilate, iterations=1)
+                                base_blurred = cv2.GaussianBlur(face_crop, (5, 5), 1.2)
+                                skin_texture = face_crop.astype(np.float32) - base_blurred.astype(np.float32)
+                                inpainted_base = cv2.inpaint(face_crop, dilated_mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
+                                healed_textured = np.clip(inpainted_base.astype(np.float32) + skin_texture * 0.75, 0, 255).astype(np.uint8)
+                                feather_mask = cv2.GaussianBlur(dilated_mask.astype(np.float32) / 255.0, (5, 5), 1.2)[:, :, np.newaxis]
+                                blended = face_crop.astype(np.float32) * (1.0 - feather_mask) + healed_textured.astype(np.float32) * feather_mask
+                                img[y1:y2, x1:x2] = blended
                 except Exception:
                     pass
-
-            # C. Retouch4me Frequency-Preserving Inpainting & Seamless Texture Synthesis
-            if np.any(combined_heal_mask > 0):
-                # 1. Tight 3x3 dilation for minimal border coverage
-                kernel_dilate = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-                dilated_mask = cv2.dilate(combined_heal_mask, kernel_dilate, iterations=1)
-
-                # 2. Extract High-Frequency Skin Pore Texture (Preserves 100% natural pore detail)
-                base_blurred = cv2.GaussianBlur(img_u8, (5, 5), 1.2)
-                skin_texture = img_u8.astype(np.float32) - base_blurred.astype(np.float32)
-
-                # 3. Localized Inpainting with strict tight radius (3px)
-                # Tightly samples healthy adjacent skin color, never smearing distant hair or facial features
-                inpainted_base = cv2.inpaint(img_u8, dilated_mask, inpaintRadius=3, flags=cv2.INPAINT_TELEA)
-
-                # 4. Synthesize natural skin micro-texture back onto the healed tone layer
-                healed_textured = np.clip(inpainted_base.astype(np.float32) + skin_texture * 0.75, 0, 255).astype(np.uint8)
-
-                # 5. Micro Alpha-Feathering at edges for invisible, photorealistic transition
-                feather_mask = cv2.GaussianBlur(dilated_mask.astype(np.float32) / 255.0, (5, 5), 1.2)
-                feather_mask_3c = np.dstack([feather_mask, feather_mask, feather_mask])
-
-                blended_heal = img_u8.astype(np.float32) * (1.0 - feather_mask_3c) + healed_textured.astype(np.float32) * feather_mask_3c
-                img = np.clip(blended_heal, 0.0, 255.0)
         except Exception:
             pass
 
-    # 7. SkinFiner-Style Texture-Preserving Facial Skin Smoothing (only skin/face, pores preserved)
+    # 7. SkinFiner-Style Texture-Preserving Facial Skin Smoothing (Fast Face-Localized & Proxy-Accelerated)
     skin_smoothing = float(getattr(params, 'skin_smoothing', 0.0) or 0.0)
     if skin_smoothing > 1.0:
         try:
             h, w = img.shape[:2]
-            img_u8 = np.clip(img, 0, 255).astype(np.uint8)
+            f_boxes = detected_face_boxes
+            strength_factor = min(0.85, (skin_smoothing / 100.0) * 0.85)
 
-            # A. Precise Skin Mask (YCrCb + HSV)
-            ycrcb = cv2.cvtColor(img_u8, cv2.COLOR_RGB2YCrCb)
-            Y = ycrcb[:, :, 0]
-            Cr = ycrcb[:, :, 1]
-            Cb = ycrcb[:, :, 2]
+            if f_boxes:
+                # High-speed localized processing per detected face
+                for fb in f_boxes:
+                    fx, fy, fw, fh = fb['x'], fb['y'], fb['w'], fb['h']
+                    pad_x, pad_y = int(fw * 0.25), int(fh * 0.25)
+                    x1, y1 = max(0, fx - pad_x), max(0, fy - pad_y)
+                    x2, y2 = min(w, fx + fw + pad_x), min(h, fy + fh + pad_y)
+                    fc = np.clip(img[y1:y2, x1:x2], 0, 255).astype(np.uint8)
+                    fch, fcw = fc.shape[:2]
+                    if fch < 12 or fcw < 12:
+                        continue
 
-            hsv = cv2.cvtColor(img_u8, cv2.COLOR_RGB2HSV)
-            S = hsv[:, :, 1]
-            V = hsv[:, :, 2]
+                    ycrcb_fc = cv2.cvtColor(fc, cv2.COLOR_RGB2YCrCb)
+                    Y_fc, Cr_fc, Cb_fc = ycrcb_fc[:, :, 0], ycrcb_fc[:, :, 1], ycrcb_fc[:, :, 2]
+                    hsv_fc = cv2.cvtColor(fc, cv2.COLOR_RGB2HSV)
+                    S_fc, V_fc = hsv_fc[:, :, 1], hsv_fc[:, :, 2]
+                    skin_base = (Cr_fc >= 128) & (Cr_fc <= 180) & (Cb_fc >= 75) & (Cb_fc <= 135) & (Y_fc >= 32) & (S_fc >= 15) & (S_fc <= 215)
 
-            # Detect genuine human skin pixels across all Indian skin tones
-            skin_base = (Cr >= 128) & (Cr <= 180) & (Cb >= 75) & (Cb <= 135) & (Y >= 32) & (S >= 15) & (S <= 215)
+                    gray_fc = cv2.cvtColor(fc, cv2.COLOR_RGB2GRAY)
+                    edge_mag_fc = cv2.magnitude(cv2.Sobel(gray_fc, cv2.CV_32F, 1, 0, ksize=3), cv2.Sobel(gray_fc, cv2.CV_32F, 0, 1, ksize=3))
+                    protected_skin = skin_base & (edge_mag_fc < 65.0) & (V_fc > 38) & (Cr_fc < 175)
 
-            # B. Protect Facial Features: Eyes, Eyebrows, Lips, Nostrils, Jewelry & Hair
-            gray = cv2.cvtColor(img_u8, cv2.COLOR_RGB2GRAY)
-            sobelx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
-            sobely = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
-            edge_mag = cv2.magnitude(sobelx, sobely)
+                    if np.any(protected_skin):
+                        skin_mask_f = protected_skin.astype(np.float32)
+                        ksize = max(7, (min(fch, fcw) // 55) | 1)
+                        skin_mask_f = cv2.GaussianBlur(skin_mask_f, (ksize, ksize), 0)
 
-            # Exclude true boundaries (eyelashes, pupils, dark hair, red lipstick), but preserve skin pores!
-            protected_skin = skin_base & (edge_mag < 65.0) & (V > 38) & (Cr < 175)
-
-            if np.any(protected_skin):
-                skin_mask_f = protected_skin.astype(np.float32)
-                ksize = max(7, (min(h, w) // 55) | 1)
-                skin_mask_f = cv2.GaussianBlur(skin_mask_f, (ksize, ksize), 0)
-
-                # C. Frequency Separation: Base (Smooth Tones) + High Frequency (Pores & Micro-texture)
-                d = max(9, min(15, min(h, w) // 100)) | 1
-                sigma_color = 55.0
-                sigma_space = 35.0
-                bilateral = cv2.bilateralFilter(img_u8, d=d, sigmaColor=sigma_color, sigmaSpace=sigma_space)
-
-                # High-frequency layer preserves genuine skin pores and micro-details
+                        bilateral = cv2.bilateralFilter(fc, d=9, sigmaColor=55.0, sigmaSpace=35.0)
+                        texture_blur = cv2.GaussianBlur(fc, (5, 5), 0)
+                        texture_high = fc.astype(np.float32) - texture_blur.astype(np.float32)
+                        smooth_layer = np.clip(bilateral.astype(np.float32) + 0.30 * texture_high, 0, 255)
+                        alpha = skin_mask_f[:, :, np.newaxis] * strength_factor
+                        img[y1:y2, x1:x2] = (img[y1:y2, x1:x2] * (1.0 - alpha)) + (smooth_layer * alpha)
+            else:
+                # Full canvas proxy bilateral fallback when no face is found
+                img_u8 = np.clip(img, 0, 255).astype(np.uint8)
+                scale_down = 3
+                small = cv2.resize(img_u8, (max(1, w // scale_down), max(1, h // scale_down)))
+                bilat_small = cv2.bilateralFilter(small, d=7, sigmaColor=50.0, sigmaSpace=25.0)
+                bilateral = cv2.resize(bilat_small, (w, h), interpolation=cv2.INTER_LINEAR)
                 texture_blur = cv2.GaussianBlur(img_u8, (5, 5), 0)
                 texture_high = img_u8.astype(np.float32) - texture_blur.astype(np.float32)
-
-                # Retain 30% micro-texture so pores are authentic, while creamy smoothing is clearly visible!
                 smooth_layer = np.clip(bilateral.astype(np.float32) + 0.30 * texture_high, 0, 255)
-
-                # D. Blend selectively on skin with user-controlled slider
-                strength_factor = min(0.85, (skin_smoothing / 100.0) * 0.85)
+                ycrcb_full = cv2.cvtColor(img_u8, cv2.COLOR_RGB2YCrCb)
+                skin_base = (ycrcb_full[:, :, 1] >= 128) & (ycrcb_full[:, :, 1] <= 180) & (ycrcb_full[:, :, 2] >= 75) & (ycrcb_full[:, :, 2] <= 135)
+                skin_mask_f = cv2.GaussianBlur(skin_base.astype(np.float32), (15, 15), 0)
                 alpha = skin_mask_f[:, :, np.newaxis] * strength_factor
-
                 img = (img * (1.0 - alpha)) + (smooth_layer * alpha)
-                img = np.clip(img, 0.0, 255.0)
+            img = np.clip(img, 0.0, 255.0)
         except Exception:
             pass
 
-    # 8. AI Portrait Dodge & Burn (Subtle 3D Depth & Natural Highlighting)
+    # 8. AI Portrait Dodge & Burn (Fast Proxy-Accelerated Ambient 3D Depth)
     dodge_burn = float(getattr(params, 'dodge_burn', 0.0) or 0.0)
     if dodge_burn > 1.0:
         try:
@@ -678,9 +678,13 @@ def apply_edit_pipeline(
                 ksize = max(11, (min(h, w) // 40) | 1)
                 skin_mask_f = cv2.GaussianBlur(skin_mask.astype(np.float32), (ksize, ksize), 0)
 
-                # Broad ambient lighting map
-                k_ambient = max(31, (min(h, w) // 12) | 1)
-                Y_ambient = cv2.GaussianBlur(Y, (k_ambient, k_ambient), 0)
+                # Ultra-fast downscaled ambient lighting map proxy (800px)
+                small_w = 800
+                small_h = max(1, int(h * (800.0 / w)))
+                Y_small = cv2.resize(Y, (small_w, small_h), interpolation=cv2.INTER_AREA)
+                k_amb = max(31, (min(small_h, small_w) // 12) | 1)
+                Y_amb_small = cv2.GaussianBlur(Y_small, (k_amb, k_amb), 0)
+                Y_ambient = cv2.resize(Y_amb_small, (w, h), interpolation=cv2.INTER_LINEAR)
 
                 # Dodge: Natural high points (cheekbones, bridge of nose, forehead center)
                 high_pts = np.clip((Y - Y_ambient) / 25.0, 0.0, 1.0)

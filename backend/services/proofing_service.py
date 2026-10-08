@@ -173,13 +173,16 @@ class ProofingService:
         photo_dict: Dict[str, Any],
         watermark_enabled: bool = True,
         watermark_text: str = "PROOF ONLY - Ai PhotoFlow"
-    ) -> str:
-        """Generates a single 1200px WebP preview with watermark if enabled."""
+    ) -> tuple:
+        """Generates 1200px preview and fast 360px grid thumbnail in WebP format."""
         photo_id = photo_dict["id"]
         preview_filename = f"{photo_id}.webp"
+        thumb_filename = f"{photo_id}_thumb.webp"
         preview_path = os.path.join(gallery_dir, preview_filename)
-        if os.path.exists(preview_path):
-            return preview_path
+        thumb_path = os.path.join(gallery_dir, thumb_filename)
+
+        if os.path.exists(preview_path) and os.path.exists(thumb_path):
+            return preview_path, thumb_path
 
         try:
             raw_rgb = load_image(photo_dict["file_path"], max_dim=1200)
@@ -196,12 +199,20 @@ class ProofingService:
             if watermark_enabled:
                 pil_img = self._apply_watermark(pil_img, watermark_text)
 
-            pil_img.save(preview_path, format="WEBP", quality=75, method=4)
+            # Save 1200px preview
+            pil_img.save(preview_path, format="WEBP", quality=75, method=3)
+
+            # Save fast 360px grid thumbnail
+            pil_thumb = pil_img.copy()
+            pil_thumb.thumbnail((360, 360), Image.Resampling.LANCZOS)
+            pil_thumb.save(thumb_path, format="WEBP", quality=68, method=3)
         except Exception:
             blank = Image.new("RGB", (800, 600), (20, 24, 33))
             blank.save(preview_path, format="WEBP", quality=60)
+            blank_thumb = Image.new("RGB", (320, 240), (20, 24, 33))
+            blank_thumb.save(thumb_path, format="WEBP", quality=60)
 
-        return preview_path
+        return preview_path, thumb_path
 
     def _run_preview_generation(
         self,
@@ -212,27 +223,38 @@ class ProofingService:
         watermark_enabled: bool,
         watermark_text: str
     ):
-        """Worker thread executing preview generation with progress updates."""
+        """Worker thread executing parallel preview generation with real-time progress updates."""
+        from concurrent.futures import ThreadPoolExecutor, as_completed
         batch_mgr = BatchManager()
         total = len(photos)
-        batch_mgr.add_log(job_id, f"Started generating {total} web proofing previews for gallery {gallery_uuid}")
+        batch_mgr.add_log(job_id, f"Started generating {total} web proofing previews for gallery {gallery_uuid} (Multi-Core Accelerated)...")
 
-        for idx, p in enumerate(photos):
+        num_workers = min(4, max(2, (os.cpu_count() or 4)))
+        completed_count = 0
+
+        def process_one(p):
             if job_id in batch_mgr.cancel_flags and batch_mgr.cancel_flags[job_id].is_set():
-                batch_mgr.add_log(job_id, "Preview generation cancelled by user", "WARNING")
-                return
-
-            if job_id in batch_mgr.pause_flags:
-                batch_mgr.pause_flags[job_id].wait()
-
+                return None
             fname = os.path.basename(p["file_path"])
             try:
                 self._generate_single_preview(gallery_dir, p, watermark_enabled, watermark_text)
+                return fname
             except Exception as err:
                 batch_mgr.add_log(job_id, f"Error generating preview for {fname}: {err}", "WARNING")
+                return fname
 
-            pct = round(((idx + 1) / total) * 100, 1)
-            batch_mgr.update_progress(job_id, idx + 1, total, fname, pct)
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            futures = [executor.submit(process_one, p) for p in photos]
+            for f in as_completed(futures):
+                if job_id in batch_mgr.cancel_flags and batch_mgr.cancel_flags[job_id].is_set():
+                    break
+                if job_id in batch_mgr.pause_flags:
+                    batch_mgr.pause_flags[job_id].wait()
+
+                fname = f.result() or "photo"
+                completed_count += 1
+                pct = round((completed_count / total) * 100, 1)
+                batch_mgr.update_progress(job_id, completed_count, total, fname, pct)
 
         # Mark job completed
         conn = get_connection()
@@ -240,7 +262,7 @@ class ProofingService:
         cursor.execute("UPDATE batch_jobs SET status = 'COMPLETED', progress_pct = 100.0, finished_at = CURRENT_TIMESTAMP WHERE id = ?", (job_id,))
         conn.commit()
         conn.close()
-        batch_mgr.add_log(job_id, f"All {total} proofing previews generated successfully.")
+        batch_mgr.add_log(job_id, f"All {total} proofing previews generated successfully.", "SUCCESS")
 
     def ensure_single_preview(self, gallery_uuid: str, photo_id: int) -> Optional[str]:
         """On-demand preview fallback guaranteeing zero broken images."""
@@ -263,7 +285,18 @@ class ProofingService:
         wm_enabled = bool(g["watermark_enabled"]) if g else True
         wm_text = g["watermark_text"] if g else "PROOF ONLY - Ai PhotoFlow"
         os.makedirs(gallery_dir, exist_ok=True)
-        return self._generate_single_preview(gallery_dir, dict(p), wm_enabled, wm_text)
+        prev_p, _ = self._generate_single_preview(gallery_dir, dict(p), wm_enabled, wm_text)
+        return prev_p
+
+    def ensure_single_thumb(self, gallery_uuid: str, photo_id: int) -> Optional[str]:
+        """On-demand 360px grid thumbnail fallback."""
+        gallery_dir = os.path.join(PROOFING_CACHE_DIR, gallery_uuid)
+        thumb_path = os.path.join(gallery_dir, f"{photo_id}_thumb.webp")
+        if os.path.exists(thumb_path):
+            return thumb_path
+
+        self.ensure_single_preview(gallery_uuid, photo_id)
+        return thumb_path if os.path.exists(thumb_path) else None
 
     def get_gallery_public(self, gallery_uuid: str, pin: str = "") -> Dict[str, Any]:
         """
@@ -312,6 +345,7 @@ class ProofingService:
         for r in cursor.fetchall():
             row = dict(r)
             row["preview_url"] = f"/api/proofing/preview/{gallery_uuid}/{row['id']}"
+            row["thumb_url"] = f"/api/proofing/thumb/{gallery_uuid}/{row['id']}"
             if row["client_selection"] == "SELECTED":
                 selected_count += 1
             photos_data.append(row)
@@ -504,6 +538,115 @@ class ProofingService:
             "copied_count": copied_count,
             "target_dir": target_dir,
             "manifest_file": manifest_path
+        }
+
+    def export_standalone_gallery(
+        self,
+        gallery_uuid: str,
+        destination_folder: str
+    ) -> Dict[str, Any]:
+        """
+        Exports self-contained HTML gallery with watermarked WebP photos
+        ready to upload to any cPanel/Web Hosting or Google Drive.
+        Never expires and runs 24/7 on photographer's web server.
+        """
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM client_galleries WHERE gallery_uuid = ?", (gallery_uuid,))
+        gallery = cursor.fetchone()
+        if not gallery:
+            conn.close()
+            raise ValueError(f"Gallery {gallery_uuid} not found")
+
+        g_dict = dict(gallery)
+        cursor.execute("""
+        SELECT p.id, p.filename, p.width, p.height, p.file_path, gp.client_selection, gp.client_note
+        FROM client_gallery_photos gp
+        JOIN photos p ON p.id = gp.photo_id
+        WHERE gp.gallery_uuid = ?
+        ORDER BY gp.photo_id ASC
+        """, (gallery_uuid,))
+        photos = [dict(r) for r in cursor.fetchall()]
+        conn.close()
+
+        os.makedirs(destination_folder, exist_ok=True)
+        img_dir = os.path.join(destination_folder, "images")
+        os.makedirs(img_dir, exist_ok=True)
+
+        cached_gallery_dir = os.path.join(PROOFING_CACHE_DIR, gallery_uuid)
+        wm_enabled = bool(g_dict.get("watermark_enabled", 1))
+        wm_text = g_dict.get("watermark_text", "PROOF ONLY - Ai PhotoFlow")
+
+        export_photos_data = []
+        for idx, p in enumerate(photos):
+            pid = p["id"]
+            prev_src, thumb_src = self._generate_single_preview(cached_gallery_dir, p, wm_enabled, wm_text)
+            prev_dst = os.path.join(img_dir, f"{pid}.webp")
+            thumb_dst = os.path.join(img_dir, f"{pid}_thumb.webp")
+            if os.path.exists(prev_src):
+                shutil.copy2(prev_src, prev_dst)
+            if os.path.exists(thumb_src):
+                shutil.copy2(thumb_src, thumb_dst)
+
+            export_photos_data.append({
+                "id": pid,
+                "filename": p["filename"],
+                "width": p.get("width", 1200),
+                "height": p.get("height", 800),
+                "preview_url": f"images/{pid}.webp",
+                "thumb_url": f"images/{pid}_thumb.webp",
+                "client_selection": p.get("client_selection", "UNRATED"),
+                "client_note": p.get("client_note", "")
+            })
+
+        standalone_gallery_data = {
+            "gallery_uuid": gallery_uuid,
+            "title": g_dict.get("title", "Wedding Photo Selection"),
+            "client_name": g_dict.get("client_name", ""),
+            "client_pin": g_dict.get("client_pin", ""),
+            "requires_pin": bool(g_dict.get("client_pin", "").strip()),
+            "total_photos": len(photos),
+            "selected_count": sum(1 for p in photos if p.get("client_selection") == "SELECTED"),
+            "photos": export_photos_data,
+            "is_standalone": True
+        }
+
+        template_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "templates", "proofing_gallery.html")
+        with open(template_path, "r", encoding="utf-8") as f:
+            html_content = f.read()
+
+        html_content = html_content.replace("__GALLERY_DATA_JSON__", json.dumps(standalone_gallery_data))
+
+        index_path = os.path.join(destination_folder, "index.html")
+        with open(index_path, "w", encoding="utf-8") as f:
+            f.write(html_content)
+
+        data_json_path = os.path.join(destination_folder, "gallery_data.json")
+        with open(data_json_path, "w", encoding="utf-8") as f:
+            json.dump(standalone_gallery_data, f, indent=2)
+
+        readme_path = os.path.join(destination_folder, "HOW_TO_UPLOAD_TO_WEBSITE.txt")
+        with open(readme_path, "w", encoding="utf-8") as f:
+            f.write("=========================================================================\n")
+            f.write(" Ai PhotoFlow - Standalone Gallery for Website / cPanel Hosting\n")
+            f.write("=========================================================================\n\n")
+            f.write("Aap is folder ko direct apne hosting par upload karke permanent link bana sakte hain:\n\n")
+            f.write("STEPS FOR CPANEL / HOSTINGER / GODADDY / WORDPRESS:\n")
+            f.write("1. Apne cPanel me File Manager open karein.\n")
+            f.write("2. 'public_html' ke andar ek new folder banayein, jaise: 'proofing' ya 'clients'.\n")
+            f.write("3. Is exported folder ke sabhi files (index.html, images folder, gallery_data.json) ko wahan upload kar dein.\n")
+            f.write("4. Aapka Permanent Link tayyar hai:\n")
+            f.write("   https://yourdomain.com/proofing/ (ya jo bhi folder naam ho)\n\n")
+            f.write("FAYDE:\n")
+            f.write("- Ye link KABHI EXPIRE NAHI HOGA (Permanent 24/7 online).\n")
+            f.write("- Aapka PC ya Mac band hone par bhi customer mobile par photos open aur select kar sakta hai.\n")
+            f.write("- Customer ke select karne par WhatsApp button se aapko direct selected photo list mil jayegi!\n")
+
+        return {
+            "status": "SUCCESS",
+            "destination_folder": destination_folder,
+            "total_photos": len(photos),
+            "index_file": index_path
         }
 
 

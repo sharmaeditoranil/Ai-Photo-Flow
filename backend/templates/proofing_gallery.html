@@ -704,7 +704,7 @@
           <div class="photo-card ${cardClass}" id="card-${p.id}" data-status="${p.client_selection}">
             <div class="img-wrapper" onclick="openLightbox(${idx})">
               <span class="photo-badge">#${idx + 1}</span>
-              <img src="${p.preview_url}" alt="${p.filename}" class="preview-img" loading="lazy">
+              <img src="${p.thumb_url || p.preview_url}" alt="${p.filename}" class="preview-img" loading="lazy">
               <div class="anti-theft-shield"></div>
             </div>
             <div class="card-actions">
