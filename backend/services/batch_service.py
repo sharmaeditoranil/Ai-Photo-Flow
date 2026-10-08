@@ -388,8 +388,9 @@ class BatchManager:
         export_queue = []
         for p in all_photos:
             effective_choice = p["user_selection"] if p["user_selection"] != "UNRATED" else p["ai_recommendation"]
-            if effective_choice in categories:
-                export_queue.append((p, effective_choice))
+            is_client_selected = p.get("client_selection") == "SELECTED"
+            if effective_choice in categories or ("CLIENT_SELECTED" in categories and is_client_selected):
+                export_queue.append((p, "CLIENT_SELECTED" if is_client_selected else effective_choice))
 
         total = len(export_queue)
         job_id = self.create_job(project_id, "EXPORT", total)

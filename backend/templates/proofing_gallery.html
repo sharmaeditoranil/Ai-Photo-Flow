@@ -1,0 +1,712 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Client Photo Selection — Ai PhotoFlow</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-dark: #0a0c10;
+      --bg-card: #141720;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --accent-blue: #3b82f6;
+      --accent-green: #10b981;
+      --accent-red: #ef4444;
+      --border-color: rgba(255, 255, 255, 0.08);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body, html {
+      background-color: var(--bg-dark);
+      color: var(--text-main);
+      font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+      user-select: none;
+      -webkit-user-select: none;
+      -moz-user-select: none;
+      -ms-user-select: none;
+      -webkit-touch-callout: none;
+      overflow-x: hidden;
+    }
+
+    img {
+      pointer-events: none;
+      -webkit-user-drag: none;
+      user-select: none;
+    }
+
+    /* App Header */
+    .gallery-header {
+      position: sticky;
+      top: 0;
+      z-index: 50;
+      background: rgba(10, 12, 16, 0.94);
+      backdrop-filter: blur(14px);
+      border-bottom: 1px solid var(--border-color);
+      padding: 14px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .gallery-brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .gallery-logo-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 9px;
+      background: linear-gradient(135deg, #0284c7, #f59e0b);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+    }
+
+    .gallery-title {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+      color: #fff;
+    }
+
+    .gallery-subtitle {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .header-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(16, 185, 129, 0.15);
+      border: 1px solid rgba(16, 185, 129, 0.3);
+      color: var(--accent-green);
+      padding: 5px 12px;
+      border-radius: 20px;
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    /* Filter Bar */
+    .filter-bar {
+      display: flex;
+      gap: 8px;
+      padding: 12px 20px;
+      background: #11141b;
+      border-bottom: 1px solid var(--border-color);
+      overflow-x: auto;
+      scrollbar-width: none;
+    }
+
+    .filter-btn {
+      background: transparent;
+      border: 1px solid var(--border-color);
+      color: var(--text-muted);
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.2s;
+    }
+
+    .filter-btn.active {
+      background: #2563eb;
+      color: #fff;
+      border-color: #3b82f6;
+    }
+
+    /* Photo Grid */
+    .grid-container {
+      padding: 16px;
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 14px;
+      padding-bottom: 100px;
+      min-height: 60vh;
+    }
+
+    @media (max-width: 600px) {
+      .grid-container {
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+        padding: 10px;
+        padding-bottom: 90px;
+      }
+    }
+
+    .photo-card {
+      background: var(--bg-card);
+      border-radius: 12px;
+      border: 1px solid var(--border-color);
+      overflow: hidden;
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      transition: transform 0.15s ease, border-color 0.15s ease;
+    }
+
+    .photo-card.is-selected {
+      border: 2px solid var(--accent-green);
+      box-shadow: 0 4px 14px rgba(16, 185, 129, 0.25);
+    }
+
+    .photo-card.is-rejected {
+      opacity: 0.45;
+      border: 1px solid rgba(239, 68, 68, 0.4);
+    }
+
+    .img-wrapper {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 3 / 2;
+      background: #0d1017;
+      cursor: pointer;
+      overflow: hidden;
+    }
+
+    .preview-img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    /* Anti-Theft Shield on Top of Image */
+    .anti-theft-shield {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      background: rgba(0, 0, 0, 0);
+      z-index: 5;
+    }
+
+    .photo-badge {
+      position: absolute;
+      top: 8px;
+      left: 8px;
+      z-index: 10;
+      background: rgba(0, 0, 0, 0.7);
+      backdrop-filter: blur(6px);
+      color: #fff;
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 10px;
+      font-weight: 600;
+    }
+
+    /* Card Action Footer */
+    .card-actions {
+      padding: 8px 10px;
+      background: #141720;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-top: 1px solid rgba(255, 255, 255, 0.05);
+    }
+
+    .action-btn {
+      border: none;
+      background: #1e2433;
+      padding: 6px 12px;
+      border-radius: 8px;
+      font-size: 11px;
+      font-weight: 700;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      color: var(--text-muted);
+      transition: all 0.15s;
+    }
+
+    .btn-select {
+      color: #cbd5e1;
+      background: #1e293b;
+    }
+
+    .btn-select.active {
+      background: #10b981;
+      color: #fff;
+    }
+
+    .btn-reject {
+      color: #94a3b8;
+    }
+
+    .btn-reject.active {
+      background: #ef4444;
+      color: #fff;
+    }
+
+    /* Sticky Bottom Submission Bar */
+    .bottom-bar {
+      position: fixed;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      background: rgba(14, 18, 25, 0.95);
+      backdrop-filter: blur(14px);
+      border-top: 1px solid rgba(255, 255, 255, 0.12);
+      padding: 12px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      z-index: 60;
+    }
+
+    .count-indicator {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .count-big {
+      font-size: 16px;
+      font-weight: 800;
+      color: #fff;
+    }
+
+    .count-sub {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .submit-btn {
+      background: linear-gradient(135deg, #10b981, #059669);
+      color: #fff;
+      border: none;
+      padding: 11px 22px;
+      border-radius: 10px;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(16, 185, 129, 0.35);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    /* Lightbox Modal */
+    .lightbox {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.95);
+      z-index: 100;
+      flex-direction: column;
+      justify-content: space-between;
+    }
+
+    .lightbox.active {
+      display: flex;
+    }
+
+    .lightbox-top {
+      padding: 14px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      color: #fff;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .lightbox-close {
+      background: transparent;
+      border: none;
+      color: #fff;
+      font-size: 24px;
+      cursor: pointer;
+    }
+
+    .lightbox-body {
+      flex: 1;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    .lightbox-img {
+      max-width: 95vw;
+      max-height: 78vh;
+      object-fit: contain;
+      pointer-events: none;
+      user-select: none;
+    }
+
+    .lightbox-shield {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 10;
+    }
+
+    .lightbox-nav {
+      position: absolute;
+      top: 50%;
+      transform: translateY(-50%);
+      background: rgba(255, 255, 255, 0.15);
+      border: none;
+      color: #fff;
+      font-size: 24px;
+      width: 44px;
+      height: 44px;
+      border-radius: 50%;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 15;
+    }
+
+    .lightbox-nav.prev { left: 16px; }
+    .lightbox-nav.next { right: 16px; }
+
+    .lightbox-bottom {
+      padding: 16px 20px;
+      background: rgba(14, 18, 25, 0.9);
+      display: flex;
+      justify-content: center;
+      gap: 14px;
+      z-index: 20;
+    }
+
+    .lb-btn {
+      padding: 11px 26px;
+      border-radius: 10px;
+      border: none;
+      font-size: 13px;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    /* Modal dialog */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(0,0,0,0.8);
+      z-index: 200;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .modal-overlay.active { display: flex; }
+    .modal-box {
+      background: #161a24;
+      border: 1px solid var(--border-color);
+      border-radius: 16px;
+      max-width: 440px;
+      width: 100%;
+      padding: 24px;
+      text-align: center;
+    }
+
+    /* Empty state */
+    .empty-state {
+      text-align: center;
+      padding: 60px 20px;
+      color: var(--text-muted);
+      grid-column: 1 / -1;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="gallery-header">
+    <div class="gallery-brand">
+      <div class="gallery-logo-icon">📸</div>
+      <div>
+        <h1 class="gallery-title" id="galleryTitle">Loading Gallery...</h1>
+        <p class="gallery-subtitle" id="gallerySubtitle">Wedding Photo Selection</p>
+      </div>
+    </div>
+    <div class="header-badge" id="statusBadge">
+      🔒 Protected Preview
+    </div>
+  </header>
+
+  <!-- Filter Bar -->
+  <div class="filter-bar">
+    <button class="filter-btn active" onclick="setFilter('ALL')" id="filterAllBtn">All Photos</button>
+    <button class="filter-btn" onclick="setFilter('SELECTED')" id="filterSelBtn">❤️ Selected (<span id="selTabCount">0</span>)</button>
+    <button class="filter-btn" onclick="setFilter('REJECTED')" id="filterRejBtn">❌ Rejected</button>
+    <button class="filter-btn" onclick="setFilter('UNRATED')" id="filterPenBtn">⏳ Pending</button>
+  </div>
+
+  <!-- Photo Grid -->
+  <main class="grid-container" id="photoGrid">
+    <div class="empty-state">Loading client photos...</div>
+  </main>
+
+  <!-- Sticky Bottom Submission Bar -->
+  <footer class="bottom-bar">
+    <div class="count-indicator">
+      <span class="count-big"><span id="bottomSelectedCount">0</span> Photos Selected</span>
+      <span class="count-sub" id="bottomTotalSubtitle">Total Photos in Album Set</span>
+    </div>
+    <button class="submit-btn" onclick="openSubmitModal()">
+      ✓ Submit Selection
+    </button>
+  </footer>
+
+  <!-- Lightbox -->
+  <div class="lightbox" id="lightbox">
+    <div class="lightbox-top">
+      <span id="lbTitle">Photo #1</span>
+      <button class="lightbox-close" onclick="closeLightbox()">✕</button>
+    </div>
+    <div class="lightbox-body" id="lbBody">
+      <button class="lightbox-nav prev" onclick="navigateLightbox(-1)">‹</button>
+      <img src="" alt="" class="lightbox-img" id="lbImg">
+      <div class="lightbox-shield"></div>
+      <button class="lightbox-nav next" onclick="navigateLightbox(1)">›</button>
+    </div>
+    <div class="lightbox-bottom">
+      <button class="lb-btn" style="background: #334155; color: #fff;" onclick="toggleCurrentLb('REJECTED')">✖ Reject</button>
+      <button class="lb-btn" style="background: #10b981; color: #fff;" onclick="toggleCurrentLb('SELECTED')">❤️ Select Photo</button>
+    </div>
+  </div>
+
+  <!-- Submission Confirmation Modal -->
+  <div class="modal-overlay" id="submitModal">
+    <div class="modal-box">
+      <h2 style="font-size: 18px; margin-bottom: 8px;">Submit Photo Selection?</h2>
+      <p style="font-size: 13px; color: var(--text-muted); margin-bottom: 16px;">
+        Aapne <strong id="modalSelCount" style="color: #10b981;">0 photos</strong> select ki hain. Ye final list photographer studio ko direct send ho jayegi.
+      </p>
+      <textarea id="clientNotes" placeholder="Optional remarks for photographer (e.g. please brighten mandap photos)..." style="width: 100%; height: 75px; background: #0e121a; border: 1px solid var(--border-color); border-radius: 8px; color: #fff; padding: 8px 12px; font-size: 12px; margin-bottom: 16px; outline: none;"></textarea>
+      <div style="display: flex; gap: 10px; justify-content: center;">
+        <button onclick="closeSubmitModal()" style="padding: 9px 18px; background: #262c3a; border: none; border-radius: 8px; color: #94a3b8; font-weight: 600; cursor: pointer;">Cancel</button>
+        <button onclick="confirmSubmit()" style="padding: 9px 20px; background: #10b981; border: none; border-radius: 8px; color: #fff; font-weight: 700; cursor: pointer;">Yes, Final Submit</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Embedded Gallery Data injected by FastAPI backend
+    const GALLERY_DATA = __GALLERY_DATA_JSON__;
+    const GALLERY_UUID = GALLERY_DATA.gallery_uuid;
+    let photos = GALLERY_DATA.photos || [];
+    let currentFilter = 'ALL';
+    let activeLbIndex = 0;
+
+    // Strict Anti-Download event interceptors
+    document.addEventListener('contextmenu', e => e.preventDefault());
+    document.addEventListener('dragstart', e => e.preventDefault());
+    document.addEventListener('keydown', e => {
+      if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'p')) {
+        e.preventDefault();
+      }
+    });
+
+    // Initialize Page
+    function initGallery() {
+      document.getElementById('galleryTitle').innerText = GALLERY_DATA.title || "Wedding Photo Selection";
+      document.getElementById('gallerySubtitle').innerText = GALLERY_DATA.client_name || "Client Photo Selection";
+      document.title = (GALLERY_DATA.title || "Photo Selection") + " — Ai PhotoFlow";
+
+      if (GALLERY_DATA.status === 'SUBMITTED') {
+        document.getElementById('statusBadge').innerText = "✓ Submitted to Studio";
+      }
+
+      updateCounts();
+      renderGrid();
+    }
+
+    function updateCounts() {
+      const sel = photos.filter(p => p.client_selection === 'SELECTED').length;
+      document.getElementById('bottomSelectedCount').innerText = sel;
+      document.getElementById('selTabCount').innerText = sel;
+      document.getElementById('modalSelCount').innerText = sel + " photos";
+      document.getElementById('filterAllBtn').innerText = `All Photos (${photos.length})`;
+      document.getElementById('bottomTotalSubtitle').innerText = `Total: ${photos.length} Photos in Album Set`;
+    }
+
+    function renderGrid() {
+      const container = document.getElementById('photoGrid');
+      if (photos.length === 0) {
+        container.innerHTML = '<div class="empty-state">Is gallery me abhi koi photo nahi hai.</div>';
+        return;
+      }
+
+      container.innerHTML = photos.map((p, idx) => {
+        const isSel = p.client_selection === 'SELECTED';
+        const isRej = p.client_selection === 'REJECTED';
+        const cardClass = isSel ? 'is-selected' : (isRej ? 'is-rejected' : '');
+
+        return `
+          <div class="photo-card ${cardClass}" id="card-${p.id}" data-status="${p.client_selection}">
+            <div class="img-wrapper" onclick="openLightbox(${idx})">
+              <span class="photo-badge">#${idx + 1}</span>
+              <img src="${p.preview_url}" alt="${p.filename}" class="preview-img" loading="lazy">
+              <div class="anti-theft-shield"></div>
+            </div>
+            <div class="card-actions">
+              <button class="action-btn btn-reject ${isRej ? 'active' : ''}" onclick="toggleSelection(${p.id}, 'REJECTED', event)">
+                ✖ Reject
+              </button>
+              <button class="action-btn btn-select ${isSel ? 'active' : ''}" onclick="toggleSelection(${p.id}, 'SELECTED', event)">
+                ❤️ Select
+              </button>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      applyFilter();
+    }
+
+    async function toggleSelection(photoId, newStatus, e) {
+      if (e) e.stopPropagation();
+      const p = photos.find(item => item.id === photoId);
+      if (!p) return;
+
+      const updatedStatus = p.client_selection === newStatus ? 'UNRATED' : newStatus;
+      p.client_selection = updatedStatus;
+
+      // Update Card DOM
+      const card = document.getElementById(`card-${photoId}`);
+      if (card) {
+        card.setAttribute('data-status', updatedStatus);
+        card.className = `photo-card ${updatedStatus === 'SELECTED' ? 'is-selected' : (updatedStatus === 'REJECTED' ? 'is-rejected' : '')}`;
+        const btnSel = card.querySelector('.btn-select');
+        const btnRej = card.querySelector('.btn-reject');
+        btnSel.classList.toggle('active', updatedStatus === 'SELECTED');
+        btnRej.classList.toggle('active', updatedStatus === 'REJECTED');
+      }
+
+      updateCounts();
+      applyFilter();
+
+      // Send to backend
+      try {
+        await fetch(`/api/proofing/gallery/${GALLERY_UUID}/select`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ photo_id: photoId, selection: updatedStatus })
+        });
+      } catch (err) {
+        console.error(err);
+      }
+    }
+
+    function setFilter(filter) {
+      currentFilter = filter;
+      document.querySelectorAll('.filter-btn').forEach((btn, idx) => {
+        btn.classList.toggle('active',
+          (filter === 'ALL' && idx === 0) ||
+          (filter === 'SELECTED' && idx === 1) ||
+          (filter === 'REJECTED' && idx === 2) ||
+          (filter === 'UNRATED' && idx === 3)
+        );
+      });
+      applyFilter();
+    }
+
+    function applyFilter() {
+      photos.forEach(p => {
+        const card = document.getElementById(`card-${p.id}`);
+        if (!card) return;
+        if (currentFilter === 'ALL') {
+          card.style.display = 'flex';
+        } else if (currentFilter === 'SELECTED') {
+          card.style.display = p.client_selection === 'SELECTED' ? 'flex' : 'none';
+        } else if (currentFilter === 'REJECTED') {
+          card.style.display = p.client_selection === 'REJECTED' ? 'flex' : 'none';
+        } else if (currentFilter === 'UNRATED') {
+          card.style.display = p.client_selection === 'UNRATED' ? 'flex' : 'none';
+        }
+      });
+    }
+
+    // Lightbox
+    function openLightbox(index) {
+      activeLbIndex = index;
+      const lb = document.getElementById('lightbox');
+      const p = photos[index];
+      document.getElementById('lbImg').src = p.preview_url;
+      document.getElementById('lbTitle').innerText = `Photo #${index + 1} of ${photos.length}`;
+      lb.classList.add('active');
+    }
+
+    function closeLightbox() {
+      document.getElementById('lightbox').classList.remove('active');
+    }
+
+    function navigateLightbox(dir) {
+      activeLbIndex = (activeLbIndex + dir + photos.length) % photos.length;
+      openLightbox(activeLbIndex);
+    }
+
+    function toggleCurrentLb(status) {
+      const p = photos[activeLbIndex];
+      if (p) toggleSelection(p.id, status);
+    }
+
+    // Touch Swipe in Lightbox
+    let touchStartX = 0;
+    const lbBody = document.getElementById('lbBody');
+    lbBody.addEventListener('touchstart', e => {
+      touchStartX = e.changedTouches[0].screenX;
+    }, false);
+    lbBody.addEventListener('touchend', e => {
+      const touchEndX = e.changedTouches[0].screenX;
+      if (touchStartX - touchEndX > 50) navigateLightbox(1);
+      if (touchEndX - touchStartX > 50) navigateLightbox(-1);
+    }, false);
+
+    // Submission
+    function openSubmitModal() {
+      document.getElementById('submitModal').classList.add('active');
+    }
+    function closeSubmitModal() {
+      document.getElementById('submitModal').classList.remove('active');
+    }
+    async function confirmSubmit() {
+      const notes = document.getElementById('clientNotes').value;
+      try {
+        const res = await fetch(`/api/proofing/gallery/${GALLERY_UUID}/submit`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ notes })
+        });
+        const data = await res.json();
+        alert("Shukriya! Aapka photo selection studio ko kamyabi se bhej diya gaya hai.");
+        closeSubmitModal();
+        document.getElementById('statusBadge').innerText = "✓ Submitted to Studio";
+      } catch (e) {
+        alert("Error submitting selection. Please check connection.");
+      }
+    }
+
+    // Run on page load
+    initGallery();
+  </script>
+</body>
+</html>

@@ -1,0 +1,402 @@
+import React, { useState, useEffect } from 'react';
+import { Share2, X, Copy, Check, ExternalLink, ShieldCheck, Lock, Smartphone, RefreshCw, Send } from 'lucide-react';
+import { api } from '../api';
+import { Project, Photo, ClientGallery } from '../types';
+
+interface ShareProofingModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  project: Project | null;
+  photos: Photo[];
+  onRefreshProject?: () => void;
+}
+
+export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
+  isOpen,
+  onClose,
+  project,
+  photos,
+  onRefreshProject
+}) => {
+  const [title, setTitle] = useState('');
+  const [clientName, setClientName] = useState('');
+  const [clientPin, setClientPin] = useState('');
+  const [watermarkEnabled, setWatermarkEnabled] = useState(true);
+  const [watermarkText, setWatermarkText] = useState('PROOF ONLY - Ai PhotoFlow');
+  const [selectionScope, setSelectionScope] = useState<'best' | 'edited' | 'all'>('best');
+
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [activeGallery, setActiveGallery] = useState<any | null>(null);
+  const [copied, setCopied] = useState(false);
+  const [existingGalleries, setExistingGalleries] = useState<ClientGallery[]>([]);
+
+  useEffect(() => {
+    if (project && isOpen) {
+      setTitle(project.name || 'Wedding Photo Selection');
+      setClientName(project.name.replace(/^Wedding\s*[-–]\s*/i, ''));
+      loadExistingGalleries();
+    }
+  }, [project, isOpen]);
+
+  const loadExistingGalleries = async () => {
+    if (!project) return;
+    try {
+      const list = await api.listProofingGalleries(project.id);
+      setExistingGalleries(list);
+      if (list.length > 0 && !activeGallery) {
+        setActiveGallery(list[0]);
+      }
+    } catch (e) {
+      console.error('Error fetching galleries:', e);
+    }
+  };
+
+  if (!isOpen || !project) return null;
+
+  const handleCreateGallery = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!title.trim()) {
+      setError('Please provide a gallery title');
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+
+    // Filter photo IDs based on scope
+    let targetIds: number[] = [];
+    if (selectionScope === 'best') {
+      targetIds = photos.filter(p => p.effective_selection === 'BEST' || p.is_group_best).map(p => p.id);
+    } else if (selectionScope === 'edited') {
+      targetIds = photos.filter(p => p.is_edited === 1).map(p => p.id);
+    } else {
+      targetIds = photos.map(p => p.id);
+    }
+
+    if (targetIds.length === 0) {
+      targetIds = photos.map(p => p.id);
+    }
+
+    try {
+      const res = await api.createProofingGallery(
+        project.id,
+        title.trim(),
+        clientName.trim(),
+        clientPin.trim(),
+        targetIds,
+        watermarkEnabled,
+        watermarkText.trim()
+      );
+      setActiveGallery(res);
+      await loadExistingGalleries();
+      if (onRefreshProject) onRefreshProject();
+    } catch (err: any) {
+      setError(err.message || 'Failed to create client gallery');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const getFullShareUrl = (galleryUuid: string) => {
+    const origin = window.location.origin.includes('file:') ? 'http://127.0.0.1:8000' : window.location.origin;
+    return `${origin}/gallery/${galleryUuid}`;
+  };
+
+  const handleCopyLink = (url: string) => {
+    navigator.clipboard.writeText(url);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleShareWhatsApp = (url: string) => {
+    const message = encodeURIComponent(
+      `Namaste ${clientName || 'Ji'}! Aapke wedding photos ka selection link ready ho gaya hai.\n\n👉 Click to view & select: ${url}\n\n(Note: Photos par ❤️ Select ya ✖ Reject tap karein aur final hone par Submit button click karein).`
+    );
+    window.open(`https://api.whatsapp.com/send?text=${message}`, '_blank');
+  };
+
+  return (
+    <div className="modal-overlay">
+      <div className="modal-content" style={{ maxWidth: '640px', width: '95%' }}>
+        {/* Header */}
+        <div style={{
+          padding: '16px 22px',
+          borderBottom: '1px solid #232733',
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          background: 'linear-gradient(180deg, #161a24 0%, #11141b 100%)'
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <div style={{
+              width: '32px', height: '32px', borderRadius: '8px',
+              background: 'rgba(59, 130, 246, 0.15)', border: '1px solid rgba(59, 130, 246, 0.3)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center'
+            }}>
+              <Share2 size={16} style={{ color: '#3b82f6' }} />
+            </div>
+            <div>
+              <h2 style={{ fontSize: '15px', fontWeight: 700, color: '#f8fafc' }}>
+                Client Proofing & Selection Link
+              </h2>
+              <p style={{ fontSize: '11px', color: '#94a3b8' }}>
+                Create download-protected mobile gallery for bride & groom to select photos
+              </p>
+            </div>
+          </div>
+          <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer' }}>
+            <X size={18} />
+          </button>
+        </div>
+
+        <div style={{ padding: '20px', maxHeight: '78vh', overflowY: 'auto' }}>
+          {error && (
+            <div style={{
+              background: 'rgba(239, 68, 68, 0.12)', color: '#f87171',
+              border: '1px solid rgba(239, 68, 68, 0.3)', padding: '10px 14px',
+              borderRadius: '8px', fontSize: '12px', marginBottom: '16px'
+            }}>
+              {error}
+            </div>
+          )}
+
+          {/* Active / Created Link Card */}
+          {activeGallery && (
+            <div style={{
+              background: 'linear-gradient(180deg, #162032 0%, #111824 100%)',
+              border: '1px solid #2563eb',
+              borderRadius: '12px',
+              padding: '16px',
+              marginBottom: '20px',
+              boxShadow: '0 6px 20px rgba(37, 99, 235, 0.15)'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <ShieldCheck size={16} color="#10b981" />
+                  <span style={{ fontSize: '13px', fontWeight: 700, color: '#fff' }}>
+                    Active Client Gallery Link
+                  </span>
+                </div>
+                <span style={{
+                  fontSize: '11px', fontWeight: 700, padding: '3px 9px', borderRadius: '12px',
+                  background: activeGallery.status === 'SUBMITTED' ? 'rgba(16, 185, 129, 0.2)' : 'rgba(59, 130, 246, 0.2)',
+                  color: activeGallery.status === 'SUBMITTED' ? '#10b981' : '#60a5fa'
+                }}>
+                  {activeGallery.status === 'SUBMITTED' ? '✓ Selections Submitted' : '⏳ Client Selecting'}
+                </span>
+              </div>
+
+              <div style={{
+                display: 'flex', gap: '8px', background: '#0a0d14', padding: '8px 12px',
+                borderRadius: '8px', border: '1px solid #1e2638', alignItems: 'center', marginBottom: '12px'
+              }}>
+                <input
+                  type="text"
+                  readOnly
+                  value={getFullShareUrl(activeGallery.gallery_uuid)}
+                  style={{
+                    flex: 1, background: 'transparent', border: 'none', color: '#60a5fa',
+                    fontSize: '12px', outline: 'none', fontFamily: 'monospace'
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => handleCopyLink(getFullShareUrl(activeGallery.gallery_uuid))}
+                  className="btn btn-secondary"
+                  style={{ padding: '4px 10px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}
+                >
+                  {copied ? <Check size={13} color="#10b981" /> : <Copy size={13} />}
+                  {copied ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+
+              <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <button
+                  type="button"
+                  onClick={() => handleShareWhatsApp(getFullShareUrl(activeGallery.gallery_uuid))}
+                  style={{
+                    flex: 1, padding: '8px 14px', background: '#25d366', color: '#fff',
+                    border: 'none', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px'
+                  }}
+                >
+                  <Send size={13} /> Share on WhatsApp
+                </button>
+                <button
+                  type="button"
+                  onClick={() => window.open(getFullShareUrl(activeGallery.gallery_uuid), '_blank')}
+                  className="btn btn-secondary"
+                  style={{ padding: '8px 14px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                >
+                  <ExternalLink size={13} /> Preview Gallery
+                </button>
+              </div>
+
+              <div style={{ fontSize: '11px', color: '#94a3b8', marginTop: '10px', display: 'flex', gap: '16px' }}>
+                <span>Photos: <strong>{activeGallery.total_photos}</strong></span>
+                <span>Selected: <strong style={{ color: '#10b981' }}>{activeGallery.selected_count || 0}</strong></span>
+                {activeGallery.client_pin && <span>PIN: <strong style={{ color: '#f59e0b' }}>{activeGallery.client_pin}</strong></span>}
+              </div>
+            </div>
+          )}
+
+          {/* Create New Link Form */}
+          <form onSubmit={handleCreateGallery} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+            <div style={{ fontSize: '13px', fontWeight: 700, color: '#f1f5f9', borderBottom: '1px solid #1f2533', paddingBottom: '6px' }}>
+              Create New Selection Link
+            </div>
+
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: '#94a3b8', marginBottom: '6px' }}>
+                Event / Gallery Title
+              </label>
+              <input
+                type="text"
+                value={title}
+                onChange={e => setTitle(e.target.value)}
+                placeholder="Rahul & Priya Wedding - Photo Selection"
+                style={{
+                  width: '100%', background: '#121418', border: '1px solid #2d3342',
+                  padding: '8px 12px', borderRadius: '6px', color: '#f8fafc', fontSize: '12px', outline: 'none'
+                }}
+              />
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+              <div>
+                <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: '#94a3b8', marginBottom: '6px' }}>
+                  Client Name (Couple)
+                </label>
+                <input
+                  type="text"
+                  value={clientName}
+                  onChange={e => setClientName(e.target.value)}
+                  placeholder="Rahul & Priya"
+                  style={{
+                    width: '100%', background: '#121418', border: '1px solid #2d3342',
+                    padding: '8px 12px', borderRadius: '6px', color: '#f8fafc', fontSize: '12px', outline: 'none'
+                  }}
+                />
+              </div>
+
+              <div>
+                <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: '#94a3b8', marginBottom: '6px' }}>
+                  Security PIN (Optional)
+                </label>
+                <input
+                  type="text"
+                  value={clientPin}
+                  onChange={e => setClientPin(e.target.value)}
+                  placeholder="e.g. 1234"
+                  maxLength={6}
+                  style={{
+                    width: '100%', background: '#121418', border: '1px solid #2d3342',
+                    padding: '8px 12px', borderRadius: '6px', color: '#f8fafc', fontSize: '12px', outline: 'none'
+                  }}
+                />
+              </div>
+            </div>
+
+            {/* Scope selection */}
+            <div>
+              <label style={{ display: 'block', fontSize: '11px', fontWeight: 600, color: '#94a3b8', marginBottom: '6px' }}>
+                Photos to Include in Client Link
+              </label>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => setSelectionScope('best')}
+                  style={{
+                    padding: '8px', borderRadius: '6px', border: '1px solid',
+                    borderColor: selectionScope === 'best' ? '#2563eb' : '#283042',
+                    background: selectionScope === 'best' ? 'rgba(37, 99, 235, 0.15)' : '#12151d',
+                    color: selectionScope === 'best' ? '#60a5fa' : '#94a3b8',
+                    fontSize: '11px', fontWeight: 600, cursor: 'pointer'
+                  }}
+                >
+                  ⚡ AI Best Only ({photos.filter(p => p.effective_selection === 'BEST' || p.is_group_best).length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectionScope('edited')}
+                  style={{
+                    padding: '8px', borderRadius: '6px', border: '1px solid',
+                    borderColor: selectionScope === 'edited' ? '#2563eb' : '#283042',
+                    background: selectionScope === 'edited' ? 'rgba(37, 99, 235, 0.15)' : '#12151d',
+                    color: selectionScope === 'edited' ? '#60a5fa' : '#94a3b8',
+                    fontSize: '11px', fontWeight: 600, cursor: 'pointer'
+                  }}
+                >
+                  ✨ Edited Photos ({photos.filter(p => p.is_edited === 1).length})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectionScope('all')}
+                  style={{
+                    padding: '8px', borderRadius: '6px', border: '1px solid',
+                    borderColor: selectionScope === 'all' ? '#2563eb' : '#283042',
+                    background: selectionScope === 'all' ? 'rgba(37, 99, 235, 0.15)' : '#12151d',
+                    color: selectionScope === 'all' ? '#60a5fa' : '#94a3b8',
+                    fontSize: '11px', fontWeight: 600, cursor: 'pointer'
+                  }}
+                >
+                  📷 All Non-Rejected ({photos.filter(p => p.user_selection !== 'REJECT').length})
+                </button>
+              </div>
+            </div>
+
+            {/* Anti-Download Watermark Protection */}
+            <div style={{ background: '#12151d', border: '1px solid #202636', borderRadius: '8px', padding: '12px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Lock size={14} color="#10b981" />
+                  <span style={{ fontSize: '12px', fontWeight: 600, color: '#f1f5f9' }}>Anti-Download Protection & Watermark</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={watermarkEnabled}
+                  onChange={e => setWatermarkEnabled(e.target.checked)}
+                  style={{ cursor: 'pointer' }}
+                />
+              </div>
+              <p style={{ fontSize: '11px', color: '#64748b', lineHeight: 1.4, marginBottom: '8px' }}>
+                Photos will be resized to 1200px lightweight WebP with diagonal security watermark. Right-click and long-press downloads will be blocked on client mobile & PC.
+              </p>
+              {watermarkEnabled && (
+                <input
+                  type="text"
+                  value={watermarkText}
+                  onChange={e => setWatermarkText(e.target.value)}
+                  placeholder="PROOF ONLY - Studio Name"
+                  style={{
+                    width: '100%', background: '#0d0f14', border: '1px solid #2d3342',
+                    padding: '6px 10px', borderRadius: '6px', color: '#f8fafc', fontSize: '11px', outline: 'none'
+                  }}
+                />
+              )}
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '6px' }}>
+              <button type="button" onClick={onClose} className="btn btn-secondary">
+                Close
+              </button>
+              <button
+                type="submit"
+                disabled={isLoading}
+                style={{
+                  padding: '9px 20px', background: 'linear-gradient(135deg, #2563eb, #1d4ed8)',
+                  color: '#fff', border: 'none', borderRadius: '8px', fontSize: '12px', fontWeight: 700,
+                  cursor: isLoading ? 'not-allowed' : 'pointer', display: 'flex', alignItems: 'center', gap: '6px'
+                }}
+              >
+                {isLoading ? <RefreshCw size={13} className="animate-spin" /> : <Smartphone size={13} />}
+                {isLoading ? 'Generating Previews...' : 'Generate Client Selection Link'}
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  );
+};

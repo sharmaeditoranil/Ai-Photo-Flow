@@ -3,7 +3,8 @@ import { Project, BatchJob, LicenseStatus } from '../types';
 import { BrandLogo } from './BrandLogo';
 import {
   FolderOpen, Sparkles, Wand2, Download, Pause, Play, X,
-  FileText, Keyboard, CheckCircle2, AlertCircle, RefreshCw, Settings, Trash2, Crown, ShieldCheck
+  FileText, Keyboard, CheckCircle2, AlertCircle, RefreshCw, Settings, Trash2, Crown, ShieldCheck,
+  Share2, Smartphone
 } from 'lucide-react';
 
 interface TopBarProps {
@@ -14,6 +15,7 @@ interface TopBarProps {
   onSelectProject: (id: number) => void;
   onOpenImport: () => void;
   onOpenExport: () => void;
+  onOpenShareProofing?: () => void;
   onOpenLogs: () => void;
   onOpenShortcuts: () => void;
   onOpenSettings: () => void;
@@ -35,6 +37,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   onSelectProject,
   onOpenImport,
   onOpenExport,
+  onOpenShareProofing,
   onOpenLogs,
   onOpenShortcuts,
   onOpenSettings,
@@ -278,6 +281,27 @@ export const TopBar: React.FC<TopBarProps> = ({
           <Wand2 size={13} />
           <span>Auto Edit Selected</span>
         </button>
+
+        {onOpenShareProofing && (
+          <button
+            onClick={onOpenShareProofing}
+            disabled={!currentProject}
+            className={`btn ${!currentProject ? 'btn-disabled' : ''}`}
+            style={{
+              background: !currentProject ? '#1e293b' : 'linear-gradient(135deg, #0284c7, #2563eb)',
+              color: '#ffffff',
+              border: 'none',
+              boxShadow: currentProject ? '0 2px 8px rgba(37, 99, 235, 0.35)' : 'none',
+              display: 'flex',
+              alignItems: 'center',
+              gap: '6px'
+            }}
+            title="Create and share secure web selection link with client (Mobile & PC compatible)"
+          >
+            <Smartphone size={13} />
+            <span>📱 Client Link</span>
+          </button>
+        )}
 
         <button
           onClick={onOpenExport}

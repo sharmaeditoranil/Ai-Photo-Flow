@@ -15,6 +15,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { PricingModal } from './components/PricingModal';
 import { LightboxModal } from './components/LightboxModal';
 import { AdminHubModal } from './components/AdminHubModal';
+import { ShareProofingModal } from './components/ShareProofingModal';
 
 
 export const App: React.FC = () => {
@@ -47,6 +48,7 @@ export const App: React.FC = () => {
   // Modals
   const [isImportOpen, setIsImportOpen] = useState<boolean>(false);
   const [isExportOpen, setIsExportOpen] = useState<boolean>(false);
+  const [isShareProofingOpen, setIsShareProofingOpen] = useState<boolean>(false);
   const [isLogsOpen, setIsLogsOpen] = useState<boolean>(false);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
@@ -434,6 +436,7 @@ export const App: React.FC = () => {
         onSelectProject={(id) => loadProjectDetails(id)}
         onOpenImport={() => setIsImportOpen(true)}
         onOpenExport={() => setIsExportOpen(true)}
+        onOpenShareProofing={() => setIsShareProofingOpen(true)}
         onOpenLogs={() => setIsLogsOpen(true)}
         onOpenShortcuts={() => setIsShortcutsOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
@@ -563,7 +566,21 @@ export const App: React.FC = () => {
         isOpen={isExportOpen}
         onClose={() => setIsExportOpen(false)}
         defaultFolder={currentProject?.folder_path || ''}
+        projectId={currentProject?.id}
+        clientSelectedCount={currentProject?.counts?.client_selected_count || 0}
         onStartExport={handleStartExport}
+      />
+
+      <ShareProofingModal
+        isOpen={isShareProofingOpen}
+        onClose={() => setIsShareProofingOpen(false)}
+        project={currentProject}
+        photos={photos}
+        onRefreshProject={() => {
+          if (currentProject) {
+            loadProjectDetails(currentProject.id);
+          }
+        }}
       />
 
       <BatchLogsModal

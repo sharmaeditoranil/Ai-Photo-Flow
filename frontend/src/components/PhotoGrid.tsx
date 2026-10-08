@@ -471,6 +471,62 @@ export const PhotoGrid: React.FC<PhotoGridProps> = ({
                         EDITED
                       </span>
                     )}
+
+                    {/* Client Proofing Badges */}
+                    {photo.client_selection === 'SELECTED' && (
+                      <span
+                        className="badge"
+                        style={{
+                          background: 'linear-gradient(135deg, #e11d48, #f43f5e)',
+                          color: '#ffffff',
+                          fontSize: '10px',
+                          padding: '2px 7px',
+                          fontWeight: 700,
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '3px',
+                          borderRadius: '4px',
+                          boxShadow: '0 2px 6px rgba(225, 29, 72, 0.45)'
+                        }}
+                        title="Selected by client in proofing gallery"
+                      >
+                        ❤️ Client Pick
+                      </span>
+                    )}
+
+                    {photo.client_selection === 'REJECTED' && (
+                      <span
+                        className="badge"
+                        style={{
+                          background: 'rgba(71, 85, 105, 0.85)',
+                          color: '#cbd5e1',
+                          fontSize: '9px',
+                          padding: '1px 5px',
+                          fontWeight: 500,
+                          borderRadius: '3px'
+                        }}
+                        title="Marked as rejected by client"
+                      >
+                        ✕ Client Reject
+                      </span>
+                    )}
+
+                    {photo.client_note && (
+                      <span
+                        className="badge"
+                        style={{
+                          background: 'rgba(14, 165, 233, 0.85)',
+                          color: '#ffffff',
+                          fontSize: '9px',
+                          padding: '1px 5px',
+                          fontWeight: 500,
+                          borderRadius: '3px'
+                        }}
+                        title={`Client note: "${photo.client_note}"`}
+                      >
+                        💬 Note
+                      </span>
+                    )}
                   </div>
 
                 {/* Top Right Controls: Fullscreen expand & Multi-select Checkbox */}

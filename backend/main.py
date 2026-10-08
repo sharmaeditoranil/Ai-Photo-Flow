@@ -10,7 +10,7 @@ import numpy as np
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException, Query, Body, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
 from pydantic import BaseModel
 from PIL import Image
 
@@ -25,6 +25,7 @@ from backend.core.interfaces import EditParameters
 from backend.core.photoshop_integration import PhotoshopUXPIntegration
 from backend.core.editing_model import IndianWeddingEditingModel
 from backend.services.license_service import LicenseService
+from backend.services.proofing_service import proofing_service, PROOFING_CACHE_DIR
 
 app = FastAPI(title="Ai PhotoFlow Core API", version="1.0.0")
 
@@ -277,7 +278,8 @@ def get_project_details(project_id: int):
         SUM(CASE WHEN (user_selection = 'REJECT' OR (user_selection = 'UNRATED' AND ai_recommendation = 'REJECT')) THEN 1 ELSE 0 END) as reject_count,
         COUNT(DISTINCT duplicate_group_id) as similar_groups_count,
         SUM(CASE WHEN (user_selection = 'UNRATED' AND ai_recommendation = 'SIMILAR') THEN 1 ELSE 0 END) as similar_count,
-        SUM(CASE WHEN is_edited = 1 THEN 1 ELSE 0 END) as edited_count
+        SUM(CASE WHEN is_edited = 1 THEN 1 ELSE 0 END) as edited_count,
+        SUM(CASE WHEN client_selection = 'SELECTED' THEN 1 ELSE 0 END) as client_selected_count
     FROM photos WHERE project_id = ?
     """, (project_id,))
     counts = dict(cursor.fetchone())
@@ -345,6 +347,8 @@ def list_photos(
             WHERE project_id = ? AND duplicate_group_id IS NOT NULL AND (ai_recommendation = 'SIMILAR' OR user_selection = 'UNRATED')
         )"""
         params.append(project_id)
+    elif category == "CLIENT_SELECTED":
+        query += " AND client_selection = 'SELECTED'"
 
     if isinstance(star_rating, int) and star_rating > 0:
         query += " AND star_rating = ?"
@@ -1100,6 +1104,113 @@ def issue_user_license(req: IssueManualLicenseRequest):
     if not success:
         raise HTTPException(status_code=400, detail=msg)
     return {"success": True, "message": msg, "license": data}
+
+
+# --- Client Proofing & Online Selection Endpoints ---
+class CreateGalleryRequest(BaseModel):
+    project_id: int
+    title: str
+    client_name: Optional[str] = ""
+    client_pin: Optional[str] = ""
+    photo_ids: Optional[List[int]] = None
+    watermark_enabled: bool = True
+    watermark_text: str = "PROOF ONLY - Ai PhotoFlow"
+
+class SelectPhotoRequest(BaseModel):
+    photo_id: int
+    selection: str
+    note: Optional[str] = ""
+
+class SubmitGalleryRequest(BaseModel):
+    notes: Optional[str] = ""
+
+class ExportClientSelectedRequest(BaseModel):
+    project_id: int
+    destination_folder: str
+    gallery_uuid: Optional[str] = None
+
+@app.post("/api/proofing/create")
+def create_client_gallery(req: CreateGalleryRequest):
+    try:
+        res = proofing_service.create_gallery(
+            project_id=req.project_id,
+            title=req.title,
+            client_name=req.client_name or "",
+            client_pin=req.client_pin or "",
+            photo_ids=req.photo_ids,
+            watermark_enabled=req.watermark_enabled,
+            watermark_text=req.watermark_text
+        )
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/proofing/galleries/{project_id}")
+def list_client_galleries(project_id: int):
+    return proofing_service.list_project_galleries(project_id)
+
+@app.get("/gallery/{gallery_uuid}", response_class=HTMLResponse)
+def view_client_gallery(gallery_uuid: str, pin: str = Query("")):
+    try:
+        data = proofing_service.get_gallery_public(gallery_uuid, pin)
+        tpl_path = os.path.join(os.path.dirname(__file__), "templates", "proofing_gallery.html")
+        if not os.path.exists(tpl_path):
+            raise HTTPException(status_code=404, detail="Gallery template not found")
+        with open(tpl_path, "r", encoding="utf-8") as f:
+            html = f.read()
+        html = html.replace("__GALLERY_DATA_JSON__", json.dumps(data))
+        return HTMLResponse(content=html)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.get("/api/proofing/gallery/{gallery_uuid}")
+def get_gallery_data(gallery_uuid: str, pin: str = Query("")):
+    try:
+        return proofing_service.get_gallery_public(gallery_uuid, pin)
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@app.post("/api/proofing/gallery/{gallery_uuid}/select")
+def select_gallery_photo(gallery_uuid: str, req: SelectPhotoRequest):
+    try:
+        return proofing_service.update_photo_selection(
+            gallery_uuid=gallery_uuid,
+            photo_id=req.photo_id,
+            selection=req.selection,
+            note=req.note or ""
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/proofing/gallery/{gallery_uuid}/submit")
+def submit_gallery_selection(gallery_uuid: str, req: SubmitGalleryRequest):
+    try:
+        return proofing_service.submit_gallery(
+            gallery_uuid=gallery_uuid,
+            client_notes=req.notes or ""
+        )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.get("/api/proofing/preview/{gallery_uuid}/{photo_id}")
+def get_proofing_preview(gallery_uuid: str, photo_id: int):
+    preview_file = os.path.join(PROOFING_CACHE_DIR, gallery_uuid, f"{photo_id}.webp")
+    if not os.path.exists(preview_file):
+        raise HTTPException(status_code=404, detail="Preview not found")
+    return FileResponse(preview_file, media_type="image/webp", headers={"Cache-Control": "public, max-age=86400"})
+
+@app.post("/api/proofing/export-selected")
+def export_client_selected_photos(req: ExportClientSelectedRequest):
+    try:
+        res = proofing_service.export_client_selected(
+            project_id=req.project_id,
+            destination_folder=req.destination_folder,
+            gallery_uuid=req.gallery_uuid
+        )
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
 
 if __name__ == "__main__":
     import uvicorn

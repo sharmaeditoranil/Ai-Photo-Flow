@@ -17,6 +17,8 @@ interface ExportModalProps {
     categories: string[];
   }) => Promise<string | void>;
   defaultFolder: string;
+  projectId?: number;
+  clientSelectedCount?: number;
 }
 
 export const ExportModal: React.FC<ExportModalProps> = ({
@@ -24,6 +26,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   onClose,
   onStartExport,
   defaultFolder,
+  projectId,
+  clientSelectedCount = 0,
 }) => {
   const [outputFolder, setOutputFolder] = useState<string>('');
   const [quality, setQuality] = useState<number>(92);
@@ -33,8 +37,13 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   // Category selections
   const [includeBest, setIncludeBest] = useState<boolean>(true);
   const [includeSelected, setIncludeSelected] = useState<boolean>(true);
+  const [includeClientSelected, setIncludeClientSelected] = useState<boolean>(true);
   const [includeSimilar, setIncludeSimilar] = useState<boolean>(false);
   const [includeRejected, setIncludeRejected] = useState<boolean>(false);
+
+  // 1-Click Album Master Copy State
+  const [isCopyingAlbum, setIsCopyingAlbum] = useState<boolean>(false);
+  const [albumCopySuccess, setAlbumCopySuccess] = useState<string | null>(null);
 
   // Export Progress State
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
@@ -115,6 +124,27 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     }
   };
 
+  const handleExportClientAlbumOriginals = async () => {
+    if (!projectId) {
+      alert('No active project found.');
+      return;
+    }
+    if (!outputFolder.trim()) {
+      alert('Please specify an export destination folder.');
+      return;
+    }
+    setIsCopyingAlbum(true);
+    setAlbumCopySuccess(null);
+    try {
+      const res = await api.exportClientSelectedPhotos(projectId, outputFolder.trim());
+      setAlbumCopySuccess(res.message);
+    } catch (err: any) {
+      alert(`Export error: ${err.message || 'Could not copy album photos'}`);
+    } finally {
+      setIsCopyingAlbum(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!outputFolder.trim()) {
@@ -125,11 +155,12 @@ export const ExportModal: React.FC<ExportModalProps> = ({
     const categories: string[] = [];
     if (includeBest) categories.push('BEST');
     if (includeSelected) categories.push('SELECTED');
+    if (includeClientSelected) categories.push('CLIENT_SELECTED');
     if (includeSimilar) categories.push('SIMILAR');
     if (includeRejected) categories.push('REJECT');
 
     if (categories.length === 0) {
-      alert('Please check at least one category to export (e.g. Best or Selected).');
+      alert('Please check at least one category to export (e.g. Best, Picked, or Customer Selected).');
       return;
     }
 
@@ -358,7 +389,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
             {/* Categories to Include */}
             <div style={{ background: '#161922', padding: '14px', borderRadius: '8px', border: '1px solid #252b38' }}>
               <div style={{ fontSize: '11px', fontWeight: 700, color: '#94a3b8', textTransform: 'uppercase', marginBottom: '8px' }}>
-                Photos to Include in Export:
+                Photos to Include in Batch Export:
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '12px' }}>
                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#f8fafc' }}>
@@ -379,13 +410,22 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   <span>✓ Picked Photos</span>
                 </label>
 
+                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#f43f5e', fontWeight: 600 }}>
+                  <input
+                    type="checkbox"
+                    checked={includeClientSelected}
+                    onChange={(e) => setIncludeClientSelected(e.target.checked)}
+                  />
+                  <span>❤️ Customer Selected ({clientSelectedCount})</span>
+                </label>
+
                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#cbd5e1' }}>
                   <input
                     type="checkbox"
                     checked={includeSimilar}
                     onChange={(e) => setIncludeSimilar(e.target.checked)}
                   />
-                  <span>👯 Similar / Alternate Burst Shots</span>
+                  <span>👯 Similar / Alternate Burst</span>
                 </label>
 
                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#94a3b8' }}>
@@ -397,6 +437,91 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   <span>✕ Rejected (in /Rejected folder)</span>
                 </label>
               </div>
+            </div>
+
+            {/* Customer Selected Album Master Export Card */}
+            <div style={{
+              background: 'linear-gradient(135deg, rgba(225, 29, 72, 0.12), rgba(37, 99, 235, 0.12))',
+              border: '1px solid rgba(225, 29, 72, 0.35)',
+              borderRadius: '8px',
+              padding: '12px 14px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '10px'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '10px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <span style={{ fontSize: '18px' }}>📖</span>
+                  <div>
+                    <div style={{ fontSize: '13px', fontWeight: 700, color: '#f8fafc' }}>
+                      Client Album Design Files ({clientSelectedCount} photos)
+                    </div>
+                    <div style={{ fontSize: '11px', color: '#94a3b8' }}>
+                      Copy uncompressed original camera RAW / high-res files into a separate <code>/Client_Album_Selection</code> folder.
+                    </div>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleExportClientAlbumOriginals}
+                  disabled={isCopyingAlbum || clientSelectedCount === 0}
+                  className="btn"
+                  style={{
+                    background: clientSelectedCount > 0 ? 'linear-gradient(135deg, #e11d48, #be123c)' : '#1e293b',
+                    color: '#ffffff',
+                    border: 'none',
+                    padding: '7px 12px',
+                    borderRadius: '6px',
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    cursor: (isCopyingAlbum || clientSelectedCount === 0) ? 'not-allowed' : 'pointer',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '6px',
+                    boxShadow: clientSelectedCount > 0 ? '0 2px 10px rgba(225, 29, 72, 0.4)' : 'none'
+                  }}
+                  title="Copies original camera RAW/JPG files into separate folder without recompression"
+                >
+                  {isCopyingAlbum ? (
+                    <>
+                      <RefreshCw size={12} className="spin" />
+                      <span>Copying Files...</span>
+                    </>
+                  ) : (
+                    <>
+                      <FolderCheck size={13} />
+                      <span>1-Click Copy Master Files</span>
+                    </>
+                  )}
+                </button>
+              </div>
+
+              {albumCopySuccess && (
+                <div style={{
+                  background: 'rgba(16, 185, 129, 0.15)',
+                  border: '1px solid rgba(16, 185, 129, 0.3)',
+                  padding: '8px 12px',
+                  borderRadius: '6px',
+                  fontSize: '11px',
+                  color: '#34d399',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                    <CheckCircle2 size={13} />
+                    <span>{albumCopySuccess}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => api.openFolder(`${outputFolder}/Client_Album_Selection`)}
+                    className="btn btn-secondary btn-sm"
+                    style={{ fontSize: '10px', padding: '2px 8px', borderColor: '#059669', color: '#6ee7b7' }}
+                  >
+                    Open Album Folder
+                  </button>
+                </div>
+              )}
             </div>
 
             {/* JPEG Quality Slider */}

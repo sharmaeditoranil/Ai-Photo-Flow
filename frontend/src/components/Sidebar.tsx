@@ -2,7 +2,7 @@ import React from 'react';
 import { ProjectCounts } from '../types';
 import {
   Images, Star, CheckCircle, AlertTriangle, XCircle,
-  Copy, Layers, Palette, Eye
+  Copy, Layers, Palette, Eye, Heart
 } from 'lucide-react';
 
 interface SidebarProps {
@@ -27,6 +27,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const categories = [
     { id: 'ALL', label: 'All Photos', icon: Images, count: counts?.total ?? 0, color: '#94a3b8' },
     { id: 'BEST', label: 'AI Best', icon: Star, count: counts?.best_count ?? 0, color: '#eab308' },
+    { id: 'CLIENT_SELECTED', label: 'Customer Selected', icon: Heart, count: counts?.client_selected_count ?? 0, color: '#f43f5e' },
     { id: 'SELECTED', label: 'Selected', icon: CheckCircle, count: counts?.selected_count ?? 0, color: '#10b981' },
     { id: 'REVIEW', label: 'Review', icon: AlertTriangle, count: counts?.review_count ?? 0, color: '#f59e0b' },
     { id: 'REJECT', label: 'Rejected', icon: XCircle, count: counts?.reject_count ?? 0, color: '#ef4444' },

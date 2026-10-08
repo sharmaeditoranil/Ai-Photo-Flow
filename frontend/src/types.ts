@@ -64,7 +64,26 @@ export interface Photo {
   manual_override: number;
   is_edited: number;
   dhash: string;
+  client_selection?: 'SELECTED' | 'REJECTED' | 'UNRATED';
+  client_note?: string;
   created_at: string;
+}
+
+export interface ClientGallery {
+  id: number;
+  project_id: number;
+  gallery_uuid: string;
+  title: string;
+  client_name?: string;
+  client_pin?: string;
+  total_photos: number;
+  selected_count: number;
+  status: 'ACTIVE' | 'SUBMITTED' | 'EXPIRED';
+  watermark_enabled: number;
+  watermark_text: string;
+  created_at: string;
+  updated_at: string;
+  submitted_at?: string;
 }
 
 export interface ProjectCounts {
@@ -76,6 +95,7 @@ export interface ProjectCounts {
   similar_count: number;
   similar_groups_count?: number;
   edited_count: number;
+  client_selected_count?: number;
 }
 
 export interface Project {

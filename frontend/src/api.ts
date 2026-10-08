@@ -441,6 +441,63 @@ export const api = {
       throw new Error(err.detail || 'Failed to issue license');
     }
     return res.json();
+  },
+
+  // Client Proofing & Online Selection
+  async createProofingGallery(
+    projectId: number,
+    title: string,
+    clientName?: string,
+    clientPin?: string,
+    photoIds?: number[],
+    watermarkEnabled = true,
+    watermarkText = 'PROOF ONLY - Ai PhotoFlow'
+  ): Promise<any> {
+    const res = await fetch(`${API_BASE}/proofing/create`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: projectId,
+        title,
+        client_name: clientName,
+        client_pin: clientPin,
+        photo_ids: photoIds,
+        watermark_enabled: watermarkEnabled,
+        watermark_text: watermarkText,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || 'Failed to create client gallery');
+    }
+    return res.json();
+  },
+
+  async listProofingGalleries(projectId: number): Promise<any[]> {
+    const res = await fetch(`${API_BASE}/proofing/galleries/${projectId}`);
+    if (!res.ok) throw new Error('Failed to fetch client galleries');
+    return res.json();
+  },
+
+  async exportClientSelectedPhotos(
+    projectId: number,
+    destinationFolder: string,
+    galleryUuid?: string
+  ): Promise<any> {
+    const res = await fetch(`${API_BASE}/proofing/export-selected`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        project_id: projectId,
+        destination_folder: destinationFolder,
+        gallery_uuid: galleryUuid,
+      }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.detail || 'Failed to export client selected photos');
+    }
+    return res.json();
   }
 };
 

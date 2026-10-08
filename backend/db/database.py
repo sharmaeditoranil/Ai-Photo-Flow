@@ -97,6 +97,47 @@ def init_db():
     )
     """)
 
+    # Client Proofing Migrations for Photos table
+    try:
+        cursor.execute("ALTER TABLE photos ADD COLUMN client_selection TEXT DEFAULT 'UNRATED'")
+    except Exception:
+        pass
+    try:
+        cursor.execute("ALTER TABLE photos ADD COLUMN client_note TEXT DEFAULT ''")
+    except Exception:
+        pass
+
+    # Client Proofing Galleries Table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS client_galleries (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+        gallery_uuid TEXT UNIQUE NOT NULL,
+        title TEXT NOT NULL,
+        client_name TEXT DEFAULT '',
+        client_pin TEXT DEFAULT '',
+        total_photos INTEGER DEFAULT 0,
+        selected_count INTEGER DEFAULT 0,
+        status TEXT DEFAULT 'ACTIVE',
+        watermark_enabled INTEGER DEFAULT 1,
+        watermark_text TEXT DEFAULT 'PROOF ONLY - Ai PhotoFlow',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        submitted_at TIMESTAMP
+    )
+    """)
+
+    # Client Gallery Photos Mapping Table
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS client_gallery_photos (
+        gallery_uuid TEXT NOT NULL,
+        photo_id INTEGER NOT NULL,
+        client_selection TEXT DEFAULT 'UNRATED',
+        client_note TEXT DEFAULT '',
+        PRIMARY KEY (gallery_uuid, photo_id)
+    )
+    """)
+
     conn.commit()
     conn.close()
 
