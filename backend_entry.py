@@ -16,10 +16,11 @@ if sys.platform == "win32":
     if os.path.isdir(site_packages) and site_packages not in sys.path:
         sys.path.insert(0, site_packages)
 
-    numpy_libs = os.path.join(site_packages, "numpy.libs") if os.path.isdir(site_packages) else ""
     py_dir = os.path.join(base_dir, "python")
+    cv2_dir = os.path.join(site_packages, "cv2")
+    rawpy_dir = os.path.join(site_packages, "rawpy")
 
-    for d in [numpy_libs, py_dir, site_packages]:
+    for d in [numpy_libs, py_dir, site_packages, cv2_dir, rawpy_dir]:
         if d and os.path.isdir(d):
             if hasattr(os, "add_dll_directory"):
                 try:

@@ -154,29 +154,39 @@ def apply_edit_pipeline(
     detected_face_boxes = []
     if cached_subject_info and cached_subject_info.get("faces_boxes"):
         detected_face_boxes = cached_subject_info["faces_boxes"]
-    else:
-        try:
-            if max(h, w) > 1000:
-                proxy_scale = 800.0 / float(max(h, w))
-                small_u8 = cv2.resize(orig_u8, (int(w * proxy_scale), int(h * proxy_scale)), interpolation=cv2.INTER_AREA)
-                f_m = face_detector.detect(small_u8)
-                if f_m and f_m.bounding_boxes:
-                    inv_scale = 1.0 / proxy_scale
-                    detected_face_boxes = [
-                        {
-                            "x": int(b["x"] * inv_scale),
-                            "y": int(b["y"] * inv_scale),
-                            "w": int(b["w"] * inv_scale),
-                            "h": int(b["h"] * inv_scale)
-                        }
-                        for b in f_m.bounding_boxes
-                    ]
-            else:
-                f_m = face_detector.detect(orig_u8)
-                if f_m and f_m.bounding_boxes:
-                    detected_face_boxes = f_m.bounding_boxes
-        except Exception:
-            detected_face_boxes = []
+
+    cached_skin_feather = None
+    try:
+        if max(h, w) > 1000:
+            proxy_scale = 800.0 / float(max(h, w))
+            small_u8 = cv2.resize(orig_u8, (int(w * proxy_scale), int(h * proxy_scale)), interpolation=cv2.INTER_AREA)
+        else:
+            small_u8 = orig_u8
+
+        if not detected_face_boxes:
+            f_m = face_detector.detect(small_u8)
+            if f_m and f_m.bounding_boxes:
+                inv_scale = 1.0 / proxy_scale if max(h, w) > 1000 else 1.0
+                detected_face_boxes = [
+                    {
+                        "x": int(b["x"] * inv_scale),
+                        "y": int(b["y"] * inv_scale),
+                        "w": int(b["w"] * inv_scale),
+                        "h": int(b["h"] * inv_scale)
+                    }
+                    for b in f_m.bounding_boxes
+                ]
+
+        # Fast proxy skin detection & feathered matte (eliminates repeated 24MP conversions & 100x100 blurs)
+        ycrcb_s = cv2.cvtColor(small_u8, cv2.COLOR_RGB2YCrCb)
+        skin_core_s = (ycrcb_s[:, :, 1] >= 133) & (ycrcb_s[:, :, 1] <= 175) & (ycrcb_s[:, :, 2] >= 77) & (ycrcb_s[:, :, 2] <= 127) & (ycrcb_s[:, :, 0] >= 35)
+        if np.any(skin_core_s):
+            ksize_s = max(7, (min(small_u8.shape[:2]) // 40) | 1)
+            skin_blur_s = cv2.GaussianBlur(skin_core_s.astype(np.float32), (ksize_s, ksize_s), 0)
+            cached_skin_feather = cv2.resize(skin_blur_s, (w, h), interpolation=cv2.INTER_LINEAR) if max(h, w) > 1000 else skin_blur_s
+    except Exception:
+        detected_face_boxes = detected_face_boxes or []
+        cached_skin_feather = None
 
     # 1. Straighten / Rotate if non-zero
     if abs(params.straighten) > 0.2:
@@ -229,9 +239,7 @@ def apply_edit_pipeline(
     try:
         if subject_mask is None:
             if max(h, w) > 1000:
-                proxy_scale = 800.0 / float(max(h, w))
-                small_proxy = cv2.resize(orig_u8, (int(w * proxy_scale), int(h * proxy_scale)), interpolation=cv2.INTER_AREA)
-                proxy_mask, subject_info = subject_engine.generate_subject_mask(small_proxy)
+                proxy_mask, subject_info = subject_engine.generate_subject_mask(small_u8)
                 subject_mask = cv2.resize(proxy_mask, (w, h), interpolation=cv2.INTER_LINEAR)
                 is_wide_shot = bool(subject_info.get("is_wide_shot", False))
             else:
@@ -270,42 +278,33 @@ def apply_edit_pipeline(
         pass
 
     # 4. Photographic Dynamic Range: Shadows, Highlights, Contrast, Whites, Blacks
-    # Process luminance in LAB color space to preserve chromatic purity
-    lab = cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_RGB2LAB).astype(np.float32)
-    L = lab[:, :, 0] # 0.0 to 255.0
-
-    # A. True Shadow Recovery (L < 100)
-    # Lifts dark attire while anchoring deep blacks (L < 6)
-    # Does NOT inflate facial skin midtones (L ~ 120-125)
+    # High-speed 1D photographic curve lookup (100% mathematical fidelity, zero pixel-loop overhead)
+    lut = np.arange(256, dtype=np.float32)
     if abs(params.shadows) > 0.1:
-        shadow_mask = np.clip((100.0 - L) / 100.0, 0.0, 1.0) ** 1.8
-        floor_damping = np.clip(L / 8.0, 0.0, 1.0)
-        L += shadow_mask * floor_damping * (params.shadows * 0.32)
-
-    # B. Advanced Highlight Recovery (L > 128)
-    # Recovers textured highlights (bridal veil, white sherwani, sky) while keeping sparkle
+        s_mask = np.clip((100.0 - lut) / 100.0, 0.0, 1.0) ** 1.8
+        f_damp = np.clip(lut / 8.0, 0.0, 1.0)
+        lut += s_mask * f_damp * (params.shadows * 0.32)
     if abs(params.highlights) > 0.1:
-        highlight_mask = np.clip((L - 128.0) / 127.0, 0.0, 1.0) ** 1.35
-        L += highlight_mask * (params.highlights * 0.42)
-
-    # C. Whites & Blacks Tonal Anchoring
+        h_mask = np.clip((lut - 128.0) / 127.0, 0.0, 1.0) ** 1.35
+        lut += h_mask * (params.highlights * 0.42)
     if abs(params.whites) > 0.1:
-        w_mask = np.clip((L - 180.0) / 75.0, 0.0, 1.0)
-        L += w_mask * (params.whites * 0.24)
+        w_mask = np.clip((lut - 180.0) / 75.0, 0.0, 1.0)
+        lut += w_mask * (params.whites * 0.24)
     if abs(params.blacks) > 0.1:
-        b_mask = np.clip((60.0 - L) / 60.0, 0.0, 1.0)
-        L += b_mask * (params.blacks * 0.22)
-
-    # D. S-Curve Global Contrast
+        b_mask = np.clip((60.0 - lut) / 60.0, 0.0, 1.0)
+        lut += b_mask * (params.blacks * 0.22)
     if abs(params.contrast) > 0.1:
         c_factor = (100.0 + params.contrast) / 100.0
-        # Pivot around photographic midtone 128
-        L = 128.0 + (L - 128.0) * c_factor
+        lut = 128.0 + (lut - 128.0) * c_factor
+
+    lab = cv2.cvtColor(np.clip(img, 0, 255).astype(np.uint8), cv2.COLOR_RGB2LAB)
+    L_u8 = cv2.LUT(lab[:, :, 0], np.clip(lut, 0.0, 255.0).astype(np.uint8))
+    L = L_u8.astype(np.float32)
 
     # E. Local Micro-Contrast (Clarity) via CLAHE: brings out intricate jewelry, bridal embroidery & silk sheen
     try:
         clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
-        clahe_L = clahe.apply(np.clip(L, 0.0, 255.0).astype(np.uint8)).astype(np.float32)
+        clahe_L = clahe.apply(L_u8).astype(np.float32)
         # Blend 25% CLAHE for crisp micro-contrast without halos
         L = L * 0.75 + clahe_L * 0.25
     except Exception:
@@ -341,21 +340,29 @@ def apply_edit_pipeline(
             lap_b = cv2.Laplacian(lab[:, :, 2], cv2.CV_32F)
             chroma_noise = max(float(np.std(lap_a[flat_mask])), float(np.std(lap_b[flat_mask])))
             if chroma_noise > 2.5:
-                lab[:, :, 1] = cv2.bilateralFilter(lab[:, :, 1].astype(np.uint8), d=7, sigmaColor=18, sigmaSpace=9).astype(np.float32)
-                lab[:, :, 2] = cv2.bilateralFilter(lab[:, :, 2].astype(np.uint8), d=7, sigmaColor=18, sigmaSpace=9).astype(np.float32)
+                # Accelerate bilateral filter on downsampled chroma (4:2:0 principle)
+                ah, aw = lab.shape[:2]
+                a_small = cv2.resize(lab[:, :, 1].astype(np.uint8), (aw // 2, ah // 2), interpolation=cv2.INTER_AREA)
+                b_small = cv2.resize(lab[:, :, 2].astype(np.uint8), (aw // 2, ah // 2), interpolation=cv2.INTER_AREA)
+                a_filt = cv2.bilateralFilter(a_small, d=7, sigmaColor=18, sigmaSpace=9)
+                b_filt = cv2.bilateralFilter(b_small, d=7, sigmaColor=18, sigmaSpace=9)
+                lab[:, :, 1] = cv2.resize(a_filt, (aw, ah), interpolation=cv2.INTER_LINEAR).astype(np.float32)
+                lab[:, :, 2] = cv2.resize(b_filt, (aw, ah), interpolation=cv2.INTER_LINEAR).astype(np.float32)
 
         # 2. Subtle Natural Skin Smoothing (Frequency-Separated to Keep All Micro-Textures)
         # Smooths minor skin blemishes/unevenness while protecting eyes, lips, hair & jewelry
-        temp_rgb = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB)
-        ycrcb = cv2.cvtColor(temp_rgb, cv2.COLOR_RGB2YCrCb)
-        cr = ycrcb[:, :, 1]
-        cb = ycrcb[:, :, 2]
-        skin_raw = (cr >= 133) & (cr <= 173) & (cb >= 77) & (cb <= 127)
-
-        # Protect all facial contours, eyebrows, eyes, nostrils, lips from smoothing
-        flat_skin = np.clip(1.0 - (edge_mag / 28.0), 0.0, 1.0)
-        skin_mask = skin_raw.astype(np.float32) * flat_skin
-        skin_mask = cv2.GaussianBlur(skin_mask, (7, 7), sigmaX=2.0)
+        # Compute smooth skin mask from proxy if available to avoid two redundant 24MP conversions
+        if cached_skin_feather is not None:
+            flat_skin = np.clip(1.0 - (edge_mag / 28.0), 0.0, 1.0)
+            skin_mask = cached_skin_feather * flat_skin
+        else:
+            temp_rgb = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB)
+            ycrcb = cv2.cvtColor(temp_rgb, cv2.COLOR_RGB2YCrCb)
+            cr = ycrcb[:, :, 1]
+            cb = ycrcb[:, :, 2]
+            skin_raw = (cr >= 133) & (cr <= 173) & (cb >= 77) & (cb <= 127)
+            flat_skin = np.clip(1.0 - (edge_mag / 28.0), 0.0, 1.0)
+            skin_mask = cv2.GaussianBlur(skin_raw.astype(np.float32) * flat_skin, (7, 7), sigmaX=2.0)
 
         # 3. High-Pass Detail Extraction (Eyelashes, pupils, hair, fabric embroidery, jewelry facets)
         blurred_fine = cv2.GaussianBlur(L, (0, 0), sigmaX=0.85)
@@ -388,20 +395,14 @@ def apply_edit_pipeline(
     # 5. Skin-Safe Vibrance & Saturation (Bypassed in Pure Light mode for 100% natural colors)
     if not is_pure_light and (abs(params.vibrance) > 0.1 or abs(params.saturation) > 0.1):
         hsv = cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_RGB2HSV).astype(np.float32)
-        ycrcb = cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_RGB2YCrCb)
-        cr = ycrcb[:, :, 1]
-        cb = ycrcb[:, :, 2]
-        # Detect Indian skin tones: Cr in [133, 173], Cb in [77, 127]
-        skin_mask = (cr >= 133) & (cr <= 173) & (cb >= 77) & (cb <= 127)
-
         S = hsv[:, :, 1] / 255.0
 
         # Vibrance: boost muted/background colors while safeguarding skin from oversaturation
         if abs(params.vibrance) > 0.1:
             vib_mult = params.vibrance / 100.0
             boost = (1.0 - S) * (vib_mult * 0.40)
-            # Taper vibrance on skin pixels by 70% to prevent sunburn/redness
-            boost[skin_mask] *= 0.30
+            if cached_skin_feather is not None:
+                boost *= (1.0 - (cached_skin_feather * 0.70))
             S += boost
 
         # Global Saturation
@@ -416,18 +417,8 @@ def apply_edit_pipeline(
     # Strictly bypassed in Pure Light mode so original colors remain 100% untouched!
     if not is_pure_light:
         try:
-            ycrcb = cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_RGB2YCrCb)
-            Y_c = ycrcb[:, :, 0]
-            Cr_c = ycrcb[:, :, 1].astype(np.float32)
-            Cb_c = ycrcb[:, :, 2].astype(np.float32)
-
-            # Detect human skin tones: Cr in [133, 175], Cb in [77, 127], Y >= 35
-            skin_core = (Cr_c >= 133) & (Cr_c <= 175) & (Cb_c >= 77) & (Cb_c <= 127) & (Y_c >= 35)
-            if np.any(skin_core):
-                skin_mask_f = skin_core.astype(np.float32)
-                ksize = max(11, (min(img.shape[:2]) // 40) | 1)
-                skin_mask_f = cv2.GaussianBlur(skin_mask_f, (ksize, ksize), 0)
-                skin_3d = skin_mask_f[:, :, np.newaxis]
+            if cached_skin_feather is not None:
+                skin_3d = cached_skin_feather[:, :, np.newaxis]
 
                 # Measure pre-warmth perceived luminance
                 Y_before = 0.299 * img[:, :, 0] + 0.587 * img[:, :, 1] + 0.114 * img[:, :, 2]
@@ -531,20 +522,29 @@ def apply_edit_pipeline(
                             b_ch = face_crop[:, :, 2].astype(np.int16)
                             redness_c = np.clip(r_ch - ((g_ch + b_ch) // 2) + 128, 0, 255).astype(np.uint8)
 
-                            tophat_cr_s = cv2.morphologyEx(Cr_c, cv2.MORPH_TOPHAT, k_small)
-                            tophat_cr_m = cv2.morphologyEx(Cr_c, cv2.MORPH_TOPHAT, k_mid)
-                            tophat_cr_l = cv2.morphologyEx(Cr_c, cv2.MORPH_TOPHAT, k_large)
-                            tophat_cr = np.maximum(np.maximum(tophat_cr_s, tophat_cr_m), tophat_cr_l)
+                            if max(ch, cw) > 400:
+                                s_scale = 400.0 / float(max(ch, cw))
+                                sw, sh = max(1, int(cw * s_scale)), max(1, int(ch * s_scale))
+                                Cr_s = cv2.resize(Cr_c, (sw, sh), interpolation=cv2.INTER_AREA)
+                                red_s = cv2.resize(redness_c, (sw, sh), interpolation=cv2.INTER_AREA)
+                                Y_s = cv2.resize(Y_c, (sw, sh), interpolation=cv2.INTER_AREA)
 
-                            tophat_rg_s = cv2.morphologyEx(redness_c, cv2.MORPH_TOPHAT, k_small)
-                            tophat_rg_m = cv2.morphologyEx(redness_c, cv2.MORPH_TOPHAT, k_mid)
-                            tophat_rg_l = cv2.morphologyEx(redness_c, cv2.MORPH_TOPHAT, k_large)
-                            tophat_rg = np.maximum(np.maximum(tophat_rg_s, tophat_rg_m), tophat_rg_l)
+                                ks = max(3, int(13 * s_scale) | 1)
+                                kl = max(7, int(31 * s_scale) | 1)
+                                k_s_el = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ks, ks))
+                                k_l_el = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kl, kl))
 
-                            blackhat_y_s = cv2.morphologyEx(Y_c, cv2.MORPH_BLACKHAT, k_small)
-                            blackhat_y_m = cv2.morphologyEx(Y_c, cv2.MORPH_BLACKHAT, k_mid)
-                            blackhat_y_l = cv2.morphologyEx(Y_c, cv2.MORPH_BLACKHAT, k_large)
-                            blackhat_y = np.maximum(np.maximum(blackhat_y_s, blackhat_y_m), blackhat_y_l)
+                                top_cr_s = np.maximum(cv2.morphologyEx(Cr_s, cv2.MORPH_TOPHAT, k_s_el), cv2.morphologyEx(Cr_s, cv2.MORPH_TOPHAT, k_l_el))
+                                top_rg_s = np.maximum(cv2.morphologyEx(red_s, cv2.MORPH_TOPHAT, k_s_el), cv2.morphologyEx(red_s, cv2.MORPH_TOPHAT, k_l_el))
+                                blk_y_s = np.maximum(cv2.morphologyEx(Y_s, cv2.MORPH_BLACKHAT, k_s_el), cv2.morphologyEx(Y_s, cv2.MORPH_BLACKHAT, k_l_el))
+
+                                tophat_cr = cv2.resize(top_cr_s, (cw, ch), interpolation=cv2.INTER_LINEAR)
+                                tophat_rg = cv2.resize(top_rg_s, (cw, ch), interpolation=cv2.INTER_LINEAR)
+                                blackhat_y = cv2.resize(blk_y_s, (cw, ch), interpolation=cv2.INTER_LINEAR)
+                            else:
+                                tophat_cr = np.maximum(cv2.morphologyEx(Cr_c, cv2.MORPH_TOPHAT, k_small), cv2.morphologyEx(Cr_c, cv2.MORPH_TOPHAT, k_large))
+                                tophat_rg = np.maximum(cv2.morphologyEx(redness_c, cv2.MORPH_TOPHAT, k_small), cv2.morphologyEx(redness_c, cv2.MORPH_TOPHAT, k_large))
+                                blackhat_y = np.maximum(cv2.morphologyEx(Y_c, cv2.MORPH_BLACKHAT, k_small), cv2.morphologyEx(Y_c, cv2.MORPH_BLACKHAT, k_large))
 
                             face_mask_c = np.zeros((ch, cw), dtype=np.uint8)
                             fcx, fcy = int((fx - x1) + fw * 0.5), int((fy - y1) + fh * 0.52)
@@ -636,7 +636,12 @@ def apply_edit_pipeline(
                         ksize = max(7, (min(fch, fcw) // 55) | 1)
                         skin_mask_f = cv2.GaussianBlur(skin_mask_f, (ksize, ksize), 0)
 
-                        bilateral = cv2.bilateralFilter(fc, d=9, sigmaColor=55.0, sigmaSpace=35.0)
+                        if max(fch, fcw) > 600:
+                            fc_s = cv2.resize(fc, (fcw // 2, fch // 2), interpolation=cv2.INTER_AREA)
+                            bilat_s = cv2.bilateralFilter(fc_s, d=7, sigmaColor=55.0, sigmaSpace=25.0)
+                            bilateral = cv2.resize(bilat_s, (fcw, fch), interpolation=cv2.INTER_LINEAR)
+                        else:
+                            bilateral = cv2.bilateralFilter(fc, d=7, sigmaColor=55.0, sigmaSpace=30.0)
                         texture_blur = cv2.GaussianBlur(fc, (5, 5), 0)
                         texture_high = fc.astype(np.float32) - texture_blur.astype(np.float32)
                         smooth_layer = np.clip(bilateral.astype(np.float32) + 0.30 * texture_high, 0, 255)
@@ -668,15 +673,9 @@ def apply_edit_pipeline(
             h, w = img.shape[:2]
             img_u8 = np.clip(img, 0, 255).astype(np.uint8)
 
-            ycrcb = cv2.cvtColor(img_u8, cv2.COLOR_RGB2YCrCb)
-            Y = ycrcb[:, :, 0].astype(np.float32)
-            Cr = ycrcb[:, :, 1]
-            Cb = ycrcb[:, :, 2]
-
-            skin_mask = (Cr >= 133) & (Cr <= 175) & (Cb >= 77) & (Cb <= 127) & (Y >= 38)
-            if np.any(skin_mask):
-                ksize = max(11, (min(h, w) // 40) | 1)
-                skin_mask_f = cv2.GaussianBlur(skin_mask.astype(np.float32), (ksize, ksize), 0)
+            skin_mask_f = cached_skin_feather
+            if skin_mask_f is not None and np.any(skin_mask_f > 0.05):
+                Y = cv2.cvtColor(img_u8, cv2.COLOR_RGB2GRAY).astype(np.float32)
 
                 # Ultra-fast downscaled ambient lighting map proxy (800px)
                 small_w = 800

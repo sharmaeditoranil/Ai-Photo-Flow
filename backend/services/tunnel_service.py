@@ -71,6 +71,8 @@ class TunnelManager:
         candidates = [
             os.path.join(base_dir, exe_name),
             os.path.join(base_dir, "dist-backend-win", "cloudflared.exe"),
+            os.path.join(sys.prefix, "..", exe_name),
+            os.path.join(sys.prefix, exe_name),
             os.path.join(base_dir, "build", "cloudflared-darwin-arm64"),
             os.path.join(base_dir, "photoflow-backend", "cloudflared"),
             os.path.join(getattr(sys, "_MEIPASS", ""), "cloudflared"),

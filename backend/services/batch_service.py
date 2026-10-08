@@ -420,6 +420,8 @@ class BatchManager:
             try:
                 self.add_log(job_id, f"Starting High-Res Export for {total} photos to {output_folder} (Multi-Core Accelerated)...")
                 os.makedirs(output_folder, exist_ok=True)
+                import cv2
+                cv2.setNumThreads(1)
                 from concurrent.futures import ThreadPoolExecutor, as_completed
 
                 # Optimize concurrency based on CPU hardware

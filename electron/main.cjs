@@ -99,7 +99,7 @@ function startPythonBackend() {
   } catch (e) {}
 
   const extraPath = isWin
-    ? `${path.join(cwd, 'python')};${path.join(cwd, 'python', 'Lib', 'site-packages', 'numpy.libs')};${path.join(cwd, 'python', 'Lib', 'site-packages')};${process.env.PATH || ''}`
+    ? `${path.join(cwd, 'python')};${path.join(cwd, 'python', 'Lib', 'site-packages', 'cv2')};${path.join(cwd, 'python', 'Lib', 'site-packages', 'numpy.libs')};${path.join(cwd, 'python', 'Lib', 'site-packages', 'rawpy')};${path.join(cwd, 'python', 'Lib', 'site-packages')};${process.env.PATH || ''}`
     : (process.env.PATH || '');
 
   try {
