@@ -551,6 +551,8 @@ class IndianWeddingEditingModel(EditingModel):
             straighten=round(straighten, 1),
             preset_name=preset_name,
             auto_blemish=round(auto_blemish, 1),
+            heal_opacity=100.0,
+            heal_face_preset="AUTO",
             skin_smoothing=round(auto_skin_smooth, 1),
             dodge_burn=round(auto_dodge_burn, 1)
         )

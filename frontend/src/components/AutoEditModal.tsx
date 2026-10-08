@@ -122,11 +122,14 @@ export const AutoEditModal: React.FC<AutoEditModalProps> = ({
               <Wand2 size={15} />
             </div>
             <div>
-              <h2 style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#f8fafc' }}>
-                AI Batch Auto-Edit – 10 Color Tone Presets &amp; Visual Preview
+              <h2 style={{ margin: 0, fontSize: '14px', fontWeight: 700, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span>AI Batch Auto-Edit – 10 Color Tone Presets</span>
+                <span style={{ fontSize: '10px', background: 'rgba(16, 185, 129, 0.2)', color: '#34d399', border: '1px solid rgba(16, 185, 129, 0.4)', borderRadius: '4px', padding: '1px 6px', fontWeight: 600 }}>
+                  ✨ Auto Pimple &amp; Blemish Heal Active
+                </span>
               </h2>
               <p style={{ margin: '1px 0 0', fontSize: '11px', color: '#94a3b8' }}>
-                Niche presets me se tone select karein aur upar live photo preview dekhein.
+                Face detected photos me pimples/spots auto-heal honge + skin tone matched natural editing apply hogi.
               </p>
             </div>
           </div>
@@ -716,6 +719,17 @@ export const AutoEditModal: React.FC<AutoEditModalProps> = ({
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontSize: '11px', color: '#94a3b8' }}>
             <Sparkles size={13} style={{ color: '#10b981' }} />
             <span>Preset Selected: <strong style={{ color: '#f8fafc' }}>{currentPresetInfo.name}</strong></span>
+            <span style={{
+              background: 'rgba(16, 185, 129, 0.15)',
+              color: '#34d399',
+              border: '1px solid rgba(16, 185, 129, 0.3)',
+              padding: '1px 7px',
+              borderRadius: '4px',
+              fontSize: '10px',
+              fontWeight: 600
+            }}>
+              ✓ Auto Skin Tone Pimple Heal
+            </span>
           </div>
 
           <div style={{ display: 'flex', gap: '10px' }}>
