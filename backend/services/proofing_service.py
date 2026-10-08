@@ -8,10 +8,12 @@ import shutil
 import uuid
 import json
 import time
+import threading
 from typing import List, Dict, Any, Optional
 from PIL import Image, ImageDraw, ImageFont
 
 from backend.db.database import get_connection
+from backend.services.batch_service import BatchManager
 from backend.services.image_service import (
     CACHE_DIR,
     load_image,
@@ -122,36 +124,7 @@ class ProofingService:
         gallery_dir = os.path.join(PROOFING_CACHE_DIR, gallery_uuid)
         os.makedirs(gallery_dir, exist_ok=True)
 
-        # Generate lightweight 1200px previews with watermarks
-        for p in photos:
-            photo_id = p["id"]
-            preview_filename = f"{photo_id}.webp"
-            preview_path = os.path.join(gallery_dir, preview_filename)
-
-            if not os.path.exists(preview_path):
-                try:
-                    raw_rgb = load_image(p["file_path"], max_dim=1200)
-
-                    # Apply edits if photo was edited
-                    if p.get("is_edited") == 1 and p.get("edit_params"):
-                        try:
-                            params = EditParameters.from_dict(json.loads(p["edit_params"]))
-                            raw_rgb = apply_edit_pipeline(raw_rgb, params)
-                        except Exception:
-                            pass
-
-                    pil_img = Image.fromarray(raw_rgb)
-                    if watermark_enabled:
-                        pil_img = self._apply_watermark(pil_img, watermark_text)
-
-                    # Save as modern compressed WebP (~100-150 KB)
-                    pil_img.save(preview_path, format="WEBP", quality=75, method=4)
-                except Exception as e:
-                    # Fallback to blank preview if image read fails
-                    blank = Image.new("RGB", (800, 600), (20, 24, 33))
-                    blank.save(preview_path, format="WEBP", quality=60)
-
-        # Insert Gallery record
+        # Insert Gallery record immediately
         cursor.execute("""
         INSERT INTO client_galleries (
             project_id, gallery_uuid, title, client_name, client_pin,
@@ -162,7 +135,7 @@ class ProofingService:
             len(photos), 1 if watermark_enabled else 0, watermark_text
         ))
 
-        # Insert photo mappings
+        # Insert photo mappings immediately
         for p in photos:
             cursor.execute("""
             INSERT OR REPLACE INTO client_gallery_photos (gallery_uuid, photo_id, client_selection, client_note)
@@ -172,15 +145,125 @@ class ProofingService:
         conn.commit()
         conn.close()
 
+        # Create Background Batch Job for real-time progress bar tracking
+        total = len(photos)
+        job_id = BatchManager().create_job(project_id, "PROOFING_PREVIEW", total)
+
+        # Launch background preview generation thread
+        threading.Thread(
+            target=self._run_preview_generation,
+            args=(job_id, gallery_uuid, gallery_dir, photos, watermark_enabled, watermark_text),
+            daemon=True
+        ).start()
+
         return {
             "gallery_uuid": gallery_uuid,
+            "job_id": job_id,
             "project_id": project_id,
             "title": title,
             "client_name": client_name,
             "total_photos": len(photos),
             "share_url": f"http://127.0.0.1:8000/gallery/{gallery_uuid}",
-            "status": "ACTIVE"
+            "status": "PROCESSING"
         }
+
+    def _generate_single_preview(
+        self,
+        gallery_dir: str,
+        photo_dict: Dict[str, Any],
+        watermark_enabled: bool = True,
+        watermark_text: str = "PROOF ONLY - Ai PhotoFlow"
+    ) -> str:
+        """Generates a single 1200px WebP preview with watermark if enabled."""
+        photo_id = photo_dict["id"]
+        preview_filename = f"{photo_id}.webp"
+        preview_path = os.path.join(gallery_dir, preview_filename)
+        if os.path.exists(preview_path):
+            return preview_path
+
+        try:
+            raw_rgb = load_image(photo_dict["file_path"], max_dim=1200)
+
+            # Apply edits if photo was edited
+            if photo_dict.get("is_edited") == 1 and photo_dict.get("edit_params"):
+                try:
+                    params = EditParameters.from_dict(json.loads(photo_dict["edit_params"]))
+                    raw_rgb = apply_edit_pipeline(raw_rgb, params)
+                except Exception:
+                    pass
+
+            pil_img = Image.fromarray(raw_rgb)
+            if watermark_enabled:
+                pil_img = self._apply_watermark(pil_img, watermark_text)
+
+            pil_img.save(preview_path, format="WEBP", quality=75, method=4)
+        except Exception:
+            blank = Image.new("RGB", (800, 600), (20, 24, 33))
+            blank.save(preview_path, format="WEBP", quality=60)
+
+        return preview_path
+
+    def _run_preview_generation(
+        self,
+        job_id: str,
+        gallery_uuid: str,
+        gallery_dir: str,
+        photos: List[Dict[str, Any]],
+        watermark_enabled: bool,
+        watermark_text: str
+    ):
+        """Worker thread executing preview generation with progress updates."""
+        batch_mgr = BatchManager()
+        total = len(photos)
+        batch_mgr.add_log(job_id, f"Started generating {total} web proofing previews for gallery {gallery_uuid}")
+
+        for idx, p in enumerate(photos):
+            if job_id in batch_mgr.cancel_flags and batch_mgr.cancel_flags[job_id].is_set():
+                batch_mgr.add_log(job_id, "Preview generation cancelled by user", "WARNING")
+                return
+
+            if job_id in batch_mgr.pause_flags:
+                batch_mgr.pause_flags[job_id].wait()
+
+            fname = os.path.basename(p["file_path"])
+            try:
+                self._generate_single_preview(gallery_dir, p, watermark_enabled, watermark_text)
+            except Exception as err:
+                batch_mgr.add_log(job_id, f"Error generating preview for {fname}: {err}", "WARNING")
+
+            pct = round(((idx + 1) / total) * 100, 1)
+            batch_mgr.update_progress(job_id, idx + 1, total, fname, pct)
+
+        # Mark job completed
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("UPDATE batch_jobs SET status = 'COMPLETED', progress_pct = 100.0, finished_at = CURRENT_TIMESTAMP WHERE id = ?", (job_id,))
+        conn.commit()
+        conn.close()
+        batch_mgr.add_log(job_id, f"All {total} proofing previews generated successfully.")
+
+    def ensure_single_preview(self, gallery_uuid: str, photo_id: int) -> Optional[str]:
+        """On-demand preview fallback guaranteeing zero broken images."""
+        gallery_dir = os.path.join(PROOFING_CACHE_DIR, gallery_uuid)
+        preview_path = os.path.join(gallery_dir, f"{photo_id}.webp")
+        if os.path.exists(preview_path):
+            return preview_path
+
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT * FROM photos WHERE id = ?", (photo_id,))
+        p = cursor.fetchone()
+        cursor.execute("SELECT watermark_enabled, watermark_text FROM client_galleries WHERE gallery_uuid = ?", (gallery_uuid,))
+        g = cursor.fetchone()
+        conn.close()
+
+        if not p:
+            return None
+
+        wm_enabled = bool(g["watermark_enabled"]) if g else True
+        wm_text = g["watermark_text"] if g else "PROOF ONLY - Ai PhotoFlow"
+        os.makedirs(gallery_dir, exist_ok=True)
+        return self._generate_single_preview(gallery_dir, dict(p), wm_enabled, wm_text)
 
     def get_gallery_public(self, gallery_uuid: str, pin: str = "") -> Dict[str, Any]:
         """

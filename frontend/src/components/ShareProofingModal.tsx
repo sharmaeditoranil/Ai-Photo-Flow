@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Share2, X, Copy, Check, ExternalLink, ShieldCheck, Lock, Smartphone, RefreshCw, Send } from 'lucide-react';
 import { api } from '../api';
-import { Project, Photo, ClientGallery } from '../types';
+import { Project, Photo, ClientGallery, BatchJob } from '../types';
 
 interface ShareProofingModalProps {
   isOpen: boolean;
@@ -28,6 +28,7 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeGallery, setActiveGallery] = useState<any | null>(null);
+  const [activeJob, setActiveJob] = useState<BatchJob | null>(null);
   const [copied, setCopied] = useState(false);
   const [existingGalleries, setExistingGalleries] = useState<ClientGallery[]>([]);
 
@@ -38,6 +39,20 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
       loadExistingGalleries();
     }
   }, [project, isOpen]);
+
+  // Poll preview generation batch job
+  useEffect(() => {
+    if (!activeJob || (activeJob.status !== 'RUNNING' && activeJob.status !== 'PAUSED')) return;
+    const interval = setInterval(async () => {
+      try {
+        const updated = await api.getJob(activeJob.id);
+        setActiveJob(updated);
+      } catch (err) {
+        console.error('Error polling preview job:', err);
+      }
+    }, 400);
+    return () => clearInterval(interval);
+  }, [activeJob]);
 
   const loadExistingGalleries = async () => {
     if (!project) return;
@@ -89,6 +104,12 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
         watermarkText.trim()
       );
       setActiveGallery(res);
+      if (res.job_id) {
+        try {
+          const job = await api.getJob(res.job_id);
+          setActiveJob(job);
+        } catch (_) {}
+      }
       await loadExistingGalleries();
       if (onRefreshProject) onRefreshProject();
     } catch (err: any) {
@@ -158,6 +179,57 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
               borderRadius: '8px', fontSize: '12px', marginBottom: '16px'
             }}>
               {error}
+            </div>
+          )}
+
+          {/* Real-time Preview Generation Progress Bar */}
+          {activeJob && (
+            <div style={{
+              background: '#151924',
+              border: '1px solid #28334a',
+              borderRadius: '10px',
+              padding: '14px',
+              marginBottom: '16px'
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <RefreshCw
+                    size={14}
+                    style={{
+                      color: activeJob.status === 'COMPLETED' ? '#10b981' : '#38bdf8',
+                      animation: activeJob.status === 'RUNNING' ? 'spin 1.2s linear infinite' : 'none'
+                    }}
+                  />
+                  <span style={{ fontSize: '12px', fontWeight: 700, color: '#f8fafc' }}>
+                    {activeJob.status === 'COMPLETED' ? '✅ All Previews Cached & Ready' : 'Generating Protected 1200px Previews...'}
+                  </span>
+                </div>
+                <span style={{ fontSize: '12px', fontWeight: 800, color: activeJob.status === 'COMPLETED' ? '#34d399' : '#38bdf8', fontVariantNumeric: 'tabular-nums' }}>
+                  {activeJob.progress_current} / {activeJob.progress_total} ({activeJob.progress_pct}%)
+                </span>
+              </div>
+
+              {/* Progress bar line */}
+              <div style={{ width: '100%', height: '8px', background: '#202636', borderRadius: '4px', overflow: 'hidden', marginBottom: '8px' }}>
+                <div
+                  style={{
+                    width: `${activeJob.progress_pct}%`,
+                    height: '100%',
+                    background: activeJob.status === 'COMPLETED' ? '#10b981' : 'linear-gradient(90deg, #2563eb, #38bdf8)',
+                    transition: 'width 0.2s ease',
+                    boxShadow: activeJob.status === 'COMPLETED' ? '0 0 10px rgba(16, 185, 129, 0.4)' : '0 0 10px rgba(56, 189, 248, 0.4)'
+                  }}
+                />
+              </div>
+
+              <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#94a3b8' }}>
+                <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '320px' }}>
+                  {activeJob.status === 'COMPLETED' ? 'Complete! All photos cached for mobile client view.' : `Processing: ${activeJob.current_file || 'Starting...'}`}
+                </span>
+                {activeJob.status === 'RUNNING' && (
+                  <span>~{Math.ceil((activeJob.progress_total - activeJob.progress_current) * 0.12)}s left</span>
+                )}
+              </div>
             </div>
           )}
 

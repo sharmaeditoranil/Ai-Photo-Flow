@@ -16,6 +16,7 @@ import { PricingModal } from './components/PricingModal';
 import { LightboxModal } from './components/LightboxModal';
 import { AdminHubModal } from './components/AdminHubModal';
 import { ShareProofingModal } from './components/ShareProofingModal';
+import { BatchProgressModal } from './components/BatchProgressModal';
 
 
 export const App: React.FC = () => {
@@ -49,6 +50,7 @@ export const App: React.FC = () => {
   const [isImportOpen, setIsImportOpen] = useState<boolean>(false);
   const [isExportOpen, setIsExportOpen] = useState<boolean>(false);
   const [isShareProofingOpen, setIsShareProofingOpen] = useState<boolean>(false);
+  const [isBatchProgressOpen, setIsBatchProgressOpen] = useState<boolean>(false);
   const [isLogsOpen, setIsLogsOpen] = useState<boolean>(false);
   const [isShortcutsOpen, setIsShortcutsOpen] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
@@ -234,6 +236,7 @@ export const App: React.FC = () => {
       const { job_id } = await api.startCulling(currentProject.id);
       const job = await api.getJob(job_id);
       setActiveJob(job);
+      setIsBatchProgressOpen(true);
     } catch (err: any) {
       alert(`Could not start AI Culling: ${err.message}`);
     }
@@ -246,6 +249,7 @@ export const App: React.FC = () => {
       const { job_id } = await api.startAutoEdit(currentProject.id, selectedStylePreset, targetIds);
       const job = await api.getJob(job_id);
       setActiveJob(job);
+      setIsBatchProgressOpen(true);
     } catch (err: any) {
       alert(`Could not start Auto Edit: ${err.message}`);
     }
@@ -437,6 +441,7 @@ export const App: React.FC = () => {
         onOpenImport={() => setIsImportOpen(true)}
         onOpenExport={() => setIsExportOpen(true)}
         onOpenShareProofing={() => setIsShareProofingOpen(true)}
+        onOpenBatchProgress={() => setIsBatchProgressOpen(true)}
         onOpenLogs={() => setIsLogsOpen(true)}
         onOpenShortcuts={() => setIsShortcutsOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
@@ -579,6 +584,23 @@ export const App: React.FC = () => {
         onRefreshProject={() => {
           if (currentProject) {
             loadProjectDetails(currentProject.id);
+          }
+        }}
+      />
+
+      <BatchProgressModal
+        isOpen={isBatchProgressOpen}
+        onClose={() => setIsBatchProgressOpen(false)}
+        activeJob={activeJob}
+        onPauseJob={() => activeJob && api.pauseJob(activeJob.id)}
+        onResumeJob={() => activeJob && api.resumeJob(activeJob.id)}
+        onCancelJob={() => activeJob && api.cancelJob(activeJob.id)}
+        onOpenLogs={() => setIsLogsOpen(true)}
+        onDone={() => {
+          setIsBatchProgressOpen(false);
+          if (currentProject) {
+            loadProjectDetails(currentProject.id);
+            setPreviewTimestamp(Date.now());
           }
         }}
       />

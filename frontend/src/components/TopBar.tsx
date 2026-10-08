@@ -16,6 +16,7 @@ interface TopBarProps {
   onOpenImport: () => void;
   onOpenExport: () => void;
   onOpenShareProofing?: () => void;
+  onOpenBatchProgress?: () => void;
   onOpenLogs: () => void;
   onOpenShortcuts: () => void;
   onOpenSettings: () => void;
@@ -38,6 +39,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   onOpenImport,
   onOpenExport,
   onOpenShareProofing,
+  onOpenBatchProgress,
   onOpenLogs,
   onOpenShortcuts,
   onOpenSettings,
@@ -204,15 +206,20 @@ export const TopBar: React.FC<TopBarProps> = ({
       {/* Center: Real-time Batch Progress Monitor */}
       <div className="window-no-drag" style={{ flex: 1, maxWidth: '420px', margin: '0 20px' }}>
         {(isJobRunning || isJobPaused) && (
-          <div style={{
-            background: '#181b22',
-            border: '1px solid #2d3342',
-            padding: '5px 10px',
-            borderRadius: '6px',
-            display: 'flex',
-            flexDirection: 'column',
-            gap: '3px'
-          }}>
+          <div
+            onClick={onOpenBatchProgress}
+            style={{
+              background: '#181b22',
+              border: '1px solid #2d3342',
+              padding: '5px 10px',
+              borderRadius: '6px',
+              display: 'flex',
+              flexDirection: 'column',
+              gap: '3px',
+              cursor: onOpenBatchProgress ? 'pointer' : 'default'
+            }}
+            title="Click to view full batch progress popup"
+          >
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '6px', color: '#93c5fd' }}>
                 <RefreshCw size={11} className={isJobRunning ? "spin" : ""} style={{ animation: isJobRunning ? 'spin 1.5s linear infinite' : 'none' }} />

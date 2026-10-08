@@ -1194,8 +1194,8 @@ def submit_gallery_selection(gallery_uuid: str, req: SubmitGalleryRequest):
 
 @app.get("/api/proofing/preview/{gallery_uuid}/{photo_id}")
 def get_proofing_preview(gallery_uuid: str, photo_id: int):
-    preview_file = os.path.join(PROOFING_CACHE_DIR, gallery_uuid, f"{photo_id}.webp")
-    if not os.path.exists(preview_file):
+    preview_file = proofing_service.ensure_single_preview(gallery_uuid, photo_id)
+    if not preview_file or not os.path.exists(preview_file):
         raise HTTPException(status_code=404, detail="Preview not found")
     return FileResponse(preview_file, media_type="image/webp", headers={"Cache-Control": "public, max-age=86400"})
 

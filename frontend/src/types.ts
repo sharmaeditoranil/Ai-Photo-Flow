@@ -118,7 +118,7 @@ export interface BatchLog {
 export interface BatchJob {
   id: string;
   project_id: number;
-  job_type: 'CULLING' | 'AUTO_EDIT' | 'EXPORT';
+  job_type: 'CULLING' | 'AUTO_EDIT' | 'EXPORT' | 'PROOFING_PREVIEW';
   status: 'IDLE' | 'RUNNING' | 'PAUSED' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
   progress_current: number;
   progress_total: number;
