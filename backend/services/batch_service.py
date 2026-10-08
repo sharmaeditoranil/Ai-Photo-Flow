@@ -17,6 +17,42 @@ from backend.core.editing_model import IndianWeddingEditingModel
 from backend.core.scene_model import SceneConsistencyEngine
 from backend.core.interfaces import EditParameters
 
+def _available_ram_gb() -> Optional[float]:
+    """Best-effort free physical RAM in GB (no psutil dependency). Returns None if unknown."""
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            stat = MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                return stat.ullAvailPhys / (1024 ** 3)
+            return None
+        # macOS/Linux: total RAM (macOS aggressively caches, so "free" pages under-report)
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") * 0.6 / (1024 ** 3)
+    except Exception:
+        return None
+
+
+def _export_worker_count(max_workers: int = 6, gb_per_worker: float = 1.6) -> int:
+    """Parallel full-res renders are RAM-bound (~1.5 GB peak per 24MP photo). Running more
+    workers than RAM allows pushes the OS into disk swapping, which is far slower than fewer workers."""
+    cpu_workers = min(max_workers, max(1, (os.cpu_count() or 4) - 1))
+    ram = _available_ram_gb()
+    if ram is None:
+        return min(cpu_workers, 3)
+    return max(1, min(cpu_workers, int(ram // gb_per_worker)))
+
+
 class BatchManager:
     _instance = None
 
@@ -424,8 +460,9 @@ class BatchManager:
                 cv2.setNumThreads(1)
                 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-                # Optimize concurrency based on CPU hardware
-                num_workers = min(6, max(2, (os.cpu_count() or 4)))
+                # Optimize concurrency based on CPU cores and free RAM
+                num_workers = _export_worker_count(max_workers=6)
+                self.add_log(job_id, f"Using {num_workers} parallel export workers")
                 completed_count = 0
 
                 def export_single(item):

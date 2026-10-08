@@ -88,7 +88,7 @@ class TunnelManager:
     def _is_process_running(self) -> bool:
         return self.tunnel_process is not None and self.tunnel_process.poll() is None
 
-    def start_tunnel(self, port: int = 8000, timeout: int = 25) -> Dict[str, Any]:
+    def start_tunnel(self, port: int = int(os.environ.get("PORT", 8000)), timeout: int = 25) -> Dict[str, Any]:
         """
         Starts public tunnel or connects to Custom Domain / Cloudflare Named Tunnel.
         Prevents Error 1033 with keep-alive watchdog and dead URL invalidation.
@@ -313,7 +313,7 @@ class TunnelManager:
             "status": self.status if (self._is_process_running() or custom_domain) else "OFFLINE",
             "url": effective_url,
             "local_ip": self.get_local_ip(),
-            "port": 8000,
+            "port": int(os.environ.get("PORT", 8000)),
             "custom_domain_url": custom_domain,
             "has_cloudflare_token": bool(cf_token),
             "is_custom_domain": bool(custom_domain),

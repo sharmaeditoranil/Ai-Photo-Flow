@@ -11,8 +11,15 @@ from backend.core.interfaces import EditParameters
 from backend.core.subject_model import SubjectDetectionEngine
 from backend.core.face_model import OpenCVFaceModel
 
-subject_engine = SubjectDetectionEngine()
-face_detector = OpenCVFaceModel()
+try:
+    subject_engine = SubjectDetectionEngine()
+except Exception:
+    subject_engine = None
+
+try:
+    face_detector = OpenCVFaceModel()
+except Exception:
+    face_detector = None
 
 APP_DATA_DIR = os.path.expanduser("~/.photoflow")
 CACHE_DIR = os.path.join(APP_DATA_DIR, "cache")
@@ -149,7 +156,7 @@ def apply_edit_pipeline(
     img = rgb_image.astype(np.float32)
 
     # Pre-detect faces on original unedited image where facial contrast is pure and unaltered
-    orig_u8 = np.clip(rgb_image, 0, 255).astype(np.uint8)
+    orig_u8 = rgb_image if rgb_image.dtype == np.uint8 else np.clip(rgb_image, 0, 255).astype(np.uint8)
     h, w = orig_u8.shape[:2]
     detected_face_boxes = []
     if cached_subject_info and cached_subject_info.get("faces_boxes"):
@@ -163,19 +170,22 @@ def apply_edit_pipeline(
         else:
             small_u8 = orig_u8
 
-        if not detected_face_boxes:
-            f_m = face_detector.detect(small_u8)
-            if f_m and f_m.bounding_boxes:
-                inv_scale = 1.0 / proxy_scale if max(h, w) > 1000 else 1.0
-                detected_face_boxes = [
-                    {
-                        "x": int(b["x"] * inv_scale),
-                        "y": int(b["y"] * inv_scale),
-                        "w": int(b["w"] * inv_scale),
-                        "h": int(b["h"] * inv_scale)
-                    }
-                    for b in f_m.bounding_boxes
-                ]
+        if not detected_face_boxes and face_detector is not None:
+            try:
+                f_m = face_detector.detect(small_u8)
+                if f_m and f_m.bounding_boxes:
+                    inv_scale = 1.0 / proxy_scale if max(h, w) > 1000 else 1.0
+                    detected_face_boxes = [
+                        {
+                            "x": int(b["x"] * inv_scale),
+                            "y": int(b["y"] * inv_scale),
+                            "w": int(b["w"] * inv_scale),
+                            "h": int(b["h"] * inv_scale)
+                        }
+                        for b in f_m.bounding_boxes
+                    ]
+            except Exception:
+                pass
 
         # Fast proxy skin detection & feathered matte (eliminates repeated 24MP conversions & 100x100 blurs)
         ycrcb_s = cv2.cvtColor(small_u8, cv2.COLOR_RGB2YCrCb)
@@ -187,6 +197,7 @@ def apply_edit_pipeline(
     except Exception:
         detected_face_boxes = detected_face_boxes or []
         cached_skin_feather = None
+    orig_u8 = None
 
     # 1. Straighten / Rotate if non-zero
     if abs(params.straighten) > 0.2:
@@ -200,11 +211,13 @@ def apply_edit_pipeline(
         if ev_factor > 1.0:
             # Boosting exposure on underexposed photos:
             # Lift shadows and midtones while rolling off smoothly at the top to prevent clipping
-            norm = img / 255.0
-            # Photographic soft-knee transfer function
-            lifted = 1.0 - np.exp(-norm * ev_factor)
-            norm_max = 1.0 - np.exp(-ev_factor)
-            img = (lifted / max(0.01, norm_max)) * 255.0
+            # Photographic soft-knee transfer function: 255 * (1 - exp(-norm * ev)) / norm_max
+            # (computed in-place in float32 to avoid 24MP float64 temporaries)
+            norm_max = float(1.0 - np.exp(-ev_factor))
+            img *= (-ev_factor / 255.0)
+            np.exp(img, out=img)
+            np.subtract(1.0, img, out=img)
+            img *= (255.0 / max(0.01, norm_max))
         else:
             # Pulling back exposure on overexposed photos
             img *= ev_factor
@@ -230,14 +243,14 @@ def apply_edit_pipeline(
             g_scale = 1.0 - (tint_shift * 0.16)
             img[:, :, 1] *= g_scale
 
-        img = np.clip(img, 0.0, 255.0)
+        np.clip(img, 0.0, 255.0, out=img)
 
     # 3.5. Dual-Zone Adaptive Relighting (Luminous Subject & Radiant Background)
     subject_info = cached_subject_info or {}
     is_wide_shot = bool(subject_info.get("is_wide_shot", False))
     subject_mask = cached_subject_mask
     try:
-        if subject_mask is None:
+        if subject_mask is None and subject_engine is not None:
             if max(h, w) > 1000:
                 proxy_mask, subject_info = subject_engine.generate_subject_mask(small_u8)
                 subject_mask = cv2.resize(proxy_mask, (w, h), interpolation=cv2.INTER_LINEAR)
@@ -267,15 +280,17 @@ def apply_edit_pipeline(
             sub_delta = (sub_ratio - 1.0) * 0.18
             bg_delta = (bg_ratio - 1.0) * 0.15
 
-            # Seamless feathered blend across the subject mask
-            zone_delta = (subject_mask * sub_delta) + ((1.0 - subject_mask) * bg_delta)
-            zone_3d = zone_delta[:, :, np.newaxis]
-
+            # Seamless feathered blend across the subject mask:
+            # 1 + mask * sub_delta + (1 - mask) * bg_delta
             if abs(sub_delta) > 0.001 or abs(bg_delta) > 0.001:
-                img *= (1.0 + zone_3d)
-                img = np.clip(img, 0.0, 255.0)
+                zone_gain = subject_mask * (sub_delta - bg_delta)
+                zone_gain += (1.0 + bg_delta)
+                img *= zone_gain[:, :, np.newaxis]
+                del zone_gain
+                np.clip(img, 0.0, 255.0, out=img)
     except Exception:
         pass
+    subject_mask = None
 
     # 4. Photographic Dynamic Range: Shadows, Highlights, Contrast, Whites, Blacks
     # High-speed 1D photographic curve lookup (100% mathematical fidelity, zero pixel-loop overhead)
@@ -313,15 +328,20 @@ def apply_edit_pipeline(
     # E.2. Subtle Dehaze (only if atmospheric haze, fog, or lens flare veil is present)
     # User requirement: "halka sa dehaze ekdam halaka sa use karna hai agar jaruri ho tab"
     try:
-        dark_ch = np.min(img, axis=2)
+        dark_ch = np.minimum(np.minimum(img[:, :, 0], img[:, :, 1]), img[:, :, 2])
         haze_floor = float(np.percentile(dark_ch, 2))
+        del dark_ch
         # Clear photos have haze_floor < 12.0. Hazy/foggy photos have elevated black floor >= 16.0
         if haze_floor > 16.0:
             haze_strength = float(np.clip((haze_floor - 14.0) * 0.35, 1.0, 10.0))
             haze_mask = np.clip((140.0 - L) / 140.0, 0.0, 1.0)
             L = np.clip(L - (haze_mask * haze_strength), 0.0, 255.0)
+            del haze_mask
     except Exception:
         pass
+    # The float RGB buffer is rebuilt from LAB below; release it during the detail stage
+    img = None
+    clahe_L = None
 
     # F. High-Precision Detail Preservation & Multi-Scale Micro-Sharpness Enhancement
     # User requirement:
@@ -333,12 +353,14 @@ def apply_edit_pipeline(
         grad_x = cv2.Sobel(gray_u, cv2.CV_32F, 1, 0, ksize=3)
         grad_y = cv2.Sobel(gray_u, cv2.CV_32F, 0, 1, ksize=3)
         edge_mag = cv2.magnitude(grad_x, grad_y)
+        del grad_x, grad_y
         flat_mask = (edge_mag < 15.0)
 
         if np.sum(flat_mask) > 500:
             lap_a = cv2.Laplacian(lab[:, :, 1], cv2.CV_32F)
             lap_b = cv2.Laplacian(lab[:, :, 2], cv2.CV_32F)
             chroma_noise = max(float(np.std(lap_a[flat_mask])), float(np.std(lap_b[flat_mask])))
+            del lap_a, lap_b
             if chroma_noise > 2.5:
                 # Accelerate bilateral filter on downsampled chroma (4:2:0 principle)
                 ah, aw = lab.shape[:2]
@@ -364,38 +386,57 @@ def apply_edit_pipeline(
             flat_skin = np.clip(1.0 - (edge_mag / 28.0), 0.0, 1.0)
             skin_mask = cv2.GaussianBlur(skin_raw.astype(np.float32) * flat_skin, (7, 7), sigmaX=2.0)
 
-        # 3. High-Pass Detail Extraction (Eyelashes, pupils, hair, fabric embroidery, jewelry facets)
-        blurred_fine = cv2.GaussianBlur(L, (0, 0), sigmaX=0.85)
-        high_pass_micro = L - blurred_fine
+        del flat_mask, flat_skin
 
-        blurred_mid = cv2.GaussianBlur(L, (0, 0), sigmaX=1.75)
-        high_pass_mid = L - blurred_mid
+        # 3. High-Pass Detail Extraction (Eyelashes, pupils, hair, fabric embroidery, jewelry facets)
+        # crisp_boost = (high_pass_micro * 0.48 + high_pass_mid * 0.22), built in-place
+        crisp_boost = cv2.GaussianBlur(L, (0, 0), sigmaX=0.85)
+        np.subtract(L, crisp_boost, out=crisp_boost)
+        crisp_boost *= 0.48
+
+        high_pass_mid = cv2.GaussianBlur(L, (0, 0), sigmaX=1.75)
+        np.subtract(L, high_pass_mid, out=high_pass_mid)
+        high_pass_mid *= 0.22
+        crisp_boost += high_pass_mid
+        del high_pass_mid
 
         # Apply gentle 20% surface tone smoothing ONLY on flat skin regions
         if np.any(skin_mask > 0.05):
             L_smooth = cv2.bilateralFilter(np.clip(L, 0, 255).astype(np.uint8), d=7, sigmaColor=14, sigmaSpace=9).astype(np.float32)
             skin_blend = skin_mask * 0.20
             L = L * (1.0 - skin_blend) + L_smooth * skin_blend
+            del L_smooth, skin_blend
+        del skin_mask
 
         # 4. Authentic High-Pass Crisp Re-injection & Edge Enhancement
         # User requirement: "halka sa kam kariye jayada nhai ekdam halak sa kam kariyega"
-        edge_factor = np.clip((edge_mag - 10.0) / 40.0, 0.0, 1.0)
-        edge_weight = 0.65 + (0.35 * edge_factor)
+        # edge_weight = 0.65 + 0.35 * clip((edge_mag - 10) / 40, 0, 1)
+        edge_weight = edge_mag - 10.0
+        del edge_mag
+        edge_weight /= 40.0
+        np.clip(edge_weight, 0.0, 1.0, out=edge_weight)
+        edge_weight *= 0.35
+        edge_weight += 0.65
 
         # Gentle, natural crisp enhancement: maintains full original sharpness + delicate crisp definition
-        crisp_boost = (high_pass_micro * 0.48 + high_pass_mid * 0.22) * edge_weight
-        L = np.clip(L + crisp_boost, 0.0, 255.0)
+        crisp_boost *= edge_weight
+        del edge_weight
+        L = L + crisp_boost
+        del crisp_boost
+        np.clip(L, 0.0, 255.0, out=L)
 
     except Exception:
         pass
 
     lab[:, :, 0] = np.clip(L, 0.0, 255.0)
     img = cv2.cvtColor(lab.astype(np.uint8), cv2.COLOR_LAB2RGB).astype(np.float32)
+    lab = None
+    L = None
 
     # 5. Skin-Safe Vibrance & Saturation (Bypassed in Pure Light mode for 100% natural colors)
     if not is_pure_light and (abs(params.vibrance) > 0.1 or abs(params.saturation) > 0.1):
-        hsv = cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_RGB2HSV).astype(np.float32)
-        S = hsv[:, :, 1] / 255.0
+        hsv = cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_RGB2HSV)
+        S = hsv[:, :, 1].astype(np.float32) / 255.0
 
         # Vibrance: boost muted/background colors while safeguarding skin from oversaturation
         if abs(params.vibrance) > 0.1:
@@ -411,34 +452,36 @@ def apply_edit_pipeline(
             S *= sat_mult
 
         hsv[:, :, 1] = np.clip(S * 255.0, 0.0, 255.0)
-        img = cv2.cvtColor(hsv.astype(np.uint8), cv2.COLOR_HSV2RGB).astype(np.float32)
+        del S
+        img = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB).astype(np.float32)
+        del hsv
 
     # 5.5. Luminance-Neutral Warm Golden-Orange Skin Tone Radiance (Signature Wedding Glow)
     # Strictly bypassed in Pure Light mode so original colors remain 100% untouched!
     if not is_pure_light:
         try:
             if cached_skin_feather is not None:
-                skin_3d = cached_skin_feather[:, :, np.newaxis]
+                skin_f = cached_skin_feather
 
                 # Measure pre-warmth perceived luminance
                 Y_before = 0.299 * img[:, :, 0] + 0.587 * img[:, :, 1] + 0.114 * img[:, :, 2]
 
-                # Warm Golden-Orange tone matrix
-                r_warm = img[:, :, 0] * (1.0 + (0.060 * skin_3d[:, :, 0]))
-                g_warm = img[:, :, 1] * (1.0 + (0.024 * skin_3d[:, :, 0]))
-                b_warm = img[:, :, 2] * (1.0 - (0.075 * skin_3d[:, :, 0]))
+                # Warm Golden-Orange tone matrix (applied in-place per channel)
+                img[:, :, 0] *= (1.0 + (0.060 * skin_f))
+                img[:, :, 1] *= (1.0 + (0.024 * skin_f))
+                img[:, :, 2] *= (1.0 - (0.075 * skin_f))
 
                 # Measure post-warmth perceived luminance
-                Y_after = 0.299 * r_warm + 0.587 * g_warm + 0.114 * b_warm
+                Y_after = 0.299 * img[:, :, 0] + 0.587 * img[:, :, 1] + 0.114 * img[:, :, 2]
 
                 # Strictly preserve original luminance on skin pixels so exposure never overshoots!
-                scale = np.where(skin_3d[:, :, 0] > 0.05, Y_before / np.maximum(1.0, Y_after), 1.0)
-                scale = np.clip(scale, 0.90, 1.10)
+                scale = np.where(skin_f > 0.05, Y_before / np.maximum(1.0, Y_after), 1.0)
+                del Y_before, Y_after
+                np.clip(scale, 0.90, 1.10, out=scale)
 
-                img[:, :, 0] = r_warm * scale
-                img[:, :, 1] = g_warm * scale
-                img[:, :, 2] = b_warm * scale
-                img = np.clip(img, 0.0, 255.0)
+                img *= scale[:, :, np.newaxis]
+                del scale
+                np.clip(img, 0.0, 255.0, out=img)
         except Exception:
             pass
 
@@ -473,7 +516,7 @@ def apply_edit_pipeline(
             if auto_blemish > 1.0:
                 try:
                     f_boxes = detected_face_boxes
-                    if not f_boxes:
+                    if not f_boxes and face_detector is not None:
                         # Fast proxy face detect if not already available
                         proxy_s = 800.0 / float(max(h, w)) if max(h, w) > 1000 else 1.0
                         proxy_u8 = cv2.resize(np.clip(img, 0, 255).astype(np.uint8), (int(w * proxy_s), int(h * proxy_s)), interpolation=cv2.INTER_AREA) if proxy_s < 1.0 else np.clip(img, 0, 255).astype(np.uint8)
@@ -654,15 +697,31 @@ def apply_edit_pipeline(
                 small = cv2.resize(img_u8, (max(1, w // scale_down), max(1, h // scale_down)))
                 bilat_small = cv2.bilateralFilter(small, d=7, sigmaColor=50.0, sigmaSpace=25.0)
                 bilateral = cv2.resize(bilat_small, (w, h), interpolation=cv2.INTER_LINEAR)
+                del small, bilat_small
                 texture_blur = cv2.GaussianBlur(img_u8, (5, 5), 0)
-                texture_high = img_u8.astype(np.float32) - texture_blur.astype(np.float32)
-                smooth_layer = np.clip(bilateral.astype(np.float32) + 0.30 * texture_high, 0, 255)
+                # smooth_layer = clip(bilateral + 0.30 * texture_high, 0, 255), built in-place
+                smooth_layer = img_u8.astype(np.float32) - texture_blur.astype(np.float32)
+                del texture_blur
+                smooth_layer *= 0.30
+                smooth_layer += bilateral.astype(np.float32)
+                del bilateral
+                np.clip(smooth_layer, 0, 255, out=smooth_layer)
                 ycrcb_full = cv2.cvtColor(img_u8, cv2.COLOR_RGB2YCrCb)
+                del img_u8
                 skin_base = (ycrcb_full[:, :, 1] >= 128) & (ycrcb_full[:, :, 1] <= 180) & (ycrcb_full[:, :, 2] >= 75) & (ycrcb_full[:, :, 2] <= 135)
+                del ycrcb_full
                 skin_mask_f = cv2.GaussianBlur(skin_base.astype(np.float32), (15, 15), 0)
+                del skin_base
                 alpha = skin_mask_f[:, :, np.newaxis] * strength_factor
-                img = (img * (1.0 - alpha)) + (smooth_layer * alpha)
-            img = np.clip(img, 0.0, 255.0)
+                del skin_mask_f
+                # img = img * (1 - alpha) + smooth_layer * alpha
+                smooth_layer *= alpha
+                np.subtract(1.0, alpha, out=alpha)
+                img *= alpha
+                del alpha
+                img += smooth_layer
+                del smooth_layer
+            np.clip(img, 0.0, 255.0, out=img)
         except Exception:
             pass
 
@@ -676,6 +735,7 @@ def apply_edit_pipeline(
             skin_mask_f = cached_skin_feather
             if skin_mask_f is not None and np.any(skin_mask_f > 0.05):
                 Y = cv2.cvtColor(img_u8, cv2.COLOR_RGB2GRAY).astype(np.float32)
+                img_u8 = None
 
                 # Ultra-fast downscaled ambient lighting map proxy (800px)
                 small_w = 800
@@ -694,10 +754,16 @@ def apply_edit_pipeline(
                 # Ultra-gentle professional scaling (max +12% dodge, -7% burn at 100%)
                 db_strength = dodge_burn / 100.0
                 dodge_mult = 1.0 + (high_pts * db_strength * 0.12 * skin_mask_f)
+                del high_pts
                 burn_mult = 1.0 - (contour_pts * db_strength * 0.07 * skin_mask_f)
+                del contour_pts, Y, Y_ambient
 
-                combined_3d = np.clip(dodge_mult * burn_mult, 0.92, 1.15)[:, :, np.newaxis]
-                img = np.clip(img * combined_3d, 0.0, 255.0)
+                dodge_mult *= burn_mult
+                del burn_mult
+                np.clip(dodge_mult, 0.92, 1.15, out=dodge_mult)
+                img *= dodge_mult[:, :, np.newaxis]
+                del dodge_mult
+                np.clip(img, 0.0, 255.0, out=img)
         except Exception:
             pass
 
@@ -760,14 +826,22 @@ def export_photo(
 
         # Direct resize without filter chain
         full_rgb = load_image(source_path, max_dim=max_resolution)
-        bgr = cv2.cvtColor(full_rgb, cv2.COLOR_RGB2BGR)
-        cv2.imwrite(target_path, bgr, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+        _write_jpeg(target_path, full_rgb, jpeg_quality)
         return
 
     # 2. Photos with edits: apply accelerated pipeline
     full_rgb = load_image(source_path, max_dim=max_resolution)
     edited_rgb = apply_edit_pipeline(full_rgb, params)
+    del full_rgb
 
-    # Hardware-accelerated SIMD JPEG write
-    bgr = cv2.cvtColor(edited_rgb, cv2.COLOR_RGB2BGR)
-    cv2.imwrite(target_path, bgr, [cv2.IMWRITE_JPEG_QUALITY, jpeg_quality])
+    _write_jpeg(target_path, edited_rgb, jpeg_quality)
+
+
+def _write_jpeg(target_path: str, rgb: np.ndarray, jpeg_quality: int) -> None:
+    """Hardware-accelerated SIMD JPEG write. Encodes in memory and writes via numpy so
+    Windows paths with spaces or non-ASCII characters work (cv2.imwrite fails silently there)."""
+    bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
+    ok, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, int(jpeg_quality)])
+    if not ok:
+        raise IOError(f"JPEG encoding failed for {target_path}")
+    buf.tofile(target_path)

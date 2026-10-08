@@ -163,7 +163,7 @@ class ProofingService:
             "title": title,
             "client_name": client_name,
             "total_photos": len(photos),
-            "share_url": f"http://127.0.0.1:8000/gallery/{gallery_uuid}",
+            "share_url": f"http://127.0.0.1:{os.environ.get('PORT', '8000')}/gallery/{gallery_uuid}",
             "status": "PROCESSING"
         }
 

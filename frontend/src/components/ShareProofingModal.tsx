@@ -4,7 +4,7 @@ import {
   Smartphone, RefreshCw, Send, Globe, Wifi, Radio, Server,
   FolderOpen, HardDrive, Sparkles
 } from 'lucide-react';
-import { api } from '../api';
+import { api, BACKEND_ORIGIN, BACKEND_PORT } from '../api';
 import { Project, Photo, ClientGallery, BatchJob } from '../types';
 
 interface ShareProofingModalProps {
@@ -241,9 +241,9 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
       return tunnelUrl.replace(/\/+$/, '');
     }
     if (mode === 'wifi' && localIp && localIp !== '127.0.0.1') {
-      return `http://${localIp}:8000`;
+      return `http://${localIp}:${BACKEND_PORT}`;
     }
-    return window.location.origin.includes('file:') ? 'http://127.0.0.1:8000' : window.location.origin;
+    return BACKEND_ORIGIN;
   };
 
   const getFullShareUrl = (

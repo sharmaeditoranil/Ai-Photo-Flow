@@ -1,23 +1,56 @@
 import { Project, Photo, BatchJob, EditParameters, UserSelection } from './types';
 
+const electronAPI = typeof window !== 'undefined' ? (window as any).electronAPI : undefined;
+
+// Electron picks a free port for the engine (8000 unless it is taken/reserved on this PC)
+export const BACKEND_PORT: number = electronAPI?.backendPort || 8000;
+
+export const BACKEND_ORIGIN = (typeof window !== 'undefined' && window.location.protocol === 'file:')
+  ? `http://127.0.0.1:${BACKEND_PORT}`
+  : (typeof window !== 'undefined' ? window.location.origin : '');
+
 const API_BASE = (typeof window !== 'undefined' && window.location.protocol === 'file:')
-  ? 'http://127.0.0.1:8000/api'
+  ? `${BACKEND_ORIGIN}/api`
   : '/api';
 
-async function fetchWithRetry(url: string, options?: RequestInit, retries = 6, delayMs = 900): Promise<Response> {
+type BackendStatus = { state: 'starting' | 'ready' | 'exited'; exitCode: number | null; logTail: string[]; port: number };
+
+async function getBackendStatus(): Promise<BackendStatus | null> {
+  try {
+    return electronAPI?.getBackendStatus ? await electronAPI.getBackendStatus() : null;
+  } catch {
+    return null;
+  }
+}
+
+function engineCrashMessage(status: BackendStatus): string {
+  // Show the most relevant lines of the engine's own error output
+  const tail = status.logTail.filter(l => !/^INFO:/.test(l)).slice(-6).join('\n');
+  return `AI Processing Engine stopped (exit code ${status.exitCode ?? 'unknown'}).\n${tail || 'No error output.'}\nFull log: %USERPROFILE%\\.photoflow\\backend.log`;
+}
+
+// The bundled Python engine can take 20-60s on a cold Windows start (Defender scans every .pyd).
+// While Electron reports it is still starting we keep waiting; if it crashed we fail fast with the real error.
+async function fetchWithRetry(url: string, options?: RequestInit, retries = 30, delayMs = 1500): Promise<Response> {
   let lastError: any = null;
-  for (let attempt = 0; attempt <= retries; attempt++) {
+  const maxStartupWaitMs = 120000;
+  const startedAt = Date.now();
+  for (let attempt = 0; ; attempt++) {
     try {
       const res = await fetch(url, options);
       return res;
     } catch (err: any) {
       lastError = err;
-      if (attempt < retries) {
-        await new Promise(resolve => setTimeout(resolve, delayMs));
+      const status = await getBackendStatus();
+      if (status?.state === 'exited') {
+        throw new Error(engineCrashMessage(status));
       }
+      const stillBooting = status?.state === 'starting' && Date.now() - startedAt < maxStartupWaitMs;
+      if (attempt >= retries && !stillBooting) break;
+      await new Promise(resolve => setTimeout(resolve, delayMs));
     }
   }
-  throw new Error(`Cannot connect to AI Processing Engine (127.0.0.1:8000). Please wait 3 seconds and try again. (${lastError?.message || lastError})`);
+  throw new Error(`Cannot connect to AI Processing Engine (127.0.0.1:${BACKEND_PORT}). Please restart Ai PhotoFlow. If this keeps happening, send the log file from %USERPROFILE%\\.photoflow\\backend.log (${lastError?.message || lastError})`);
 }
 
 export const api = {

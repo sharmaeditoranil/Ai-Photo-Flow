@@ -16,6 +16,7 @@ if sys.platform == "win32":
     if os.path.isdir(site_packages) and site_packages not in sys.path:
         sys.path.insert(0, site_packages)
 
+    numpy_libs = os.path.join(site_packages, "numpy.libs")
     py_dir = os.path.join(base_dir, "python")
     cv2_dir = os.path.join(site_packages, "cv2")
     rawpy_dir = os.path.join(site_packages, "rawpy")

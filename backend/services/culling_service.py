@@ -34,6 +34,15 @@ SUPPORTED_EXTENSIONS = {
     '.webp'
 }
 
+
+def _imread_unicode(path: str):
+    """cv2.imread cannot open Windows paths with non-ASCII characters; decode from bytes instead."""
+    import cv2
+    try:
+        return cv2.imdecode(np.fromfile(path, dtype=np.uint8), cv2.IMREAD_COLOR)
+    except Exception:
+        return None
+
 class CullingService:
     def __init__(self):
         self.quality_model = OpenCVQualityModel()
@@ -355,9 +364,9 @@ class CullingService:
             thumb = p.get("thumbnail_path")
             img = None
             if thumb and os.path.exists(thumb):
-                img = cv2.imread(thumb)
+                img = _imread_unicode(thumb)
             if img is None and os.path.exists(p.get("file_path", "")):
-                img = cv2.imread(p["file_path"])
+                img = _imread_unicode(p["file_path"])
 
             fp = self.duplicate_model.compute_fingerprint(img)
 

@@ -16,7 +16,10 @@ class SubjectDetectionEngine:
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super(SubjectDetectionEngine, cls).__new__(cls)
-            cls._instance.face_model = OpenCVFaceModel()
+            try:
+                cls._instance.face_model = OpenCVFaceModel()
+            except Exception:
+                cls._instance.face_model = None
         return cls._instance
 
     def generate_subject_mask(
@@ -35,7 +38,10 @@ class SubjectDetectionEngine:
         gray = cv2.cvtColor(image_np, cv2.COLOR_RGB2GRAY) if len(image_np.shape) == 3 else image_np
 
         if face_metrics is None:
-            face_metrics = self.face_model.detect(image_np)
+            if self.face_model is not None:
+                face_metrics = self.face_model.detect(image_np)
+            else:
+                face_metrics = FaceMetrics(0, "NO_FACE", 0.0, [], 0.0)
 
         mask = np.zeros((h, w), dtype=np.float32)
 

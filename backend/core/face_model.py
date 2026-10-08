@@ -14,12 +14,45 @@ import threading
 _face_detector_lock = threading.Lock()
 
 class OpenCVFaceModel(FaceModel):
+    @staticmethod
+    def _safe_load_cascade(xml_path: str):
+        if not xml_path or not os.path.isfile(xml_path):
+            return None
+        try:
+            clf = cv2.CascadeClassifier()
+            # 1. Direct load
+            if clf.load(xml_path) and not clf.empty():
+                return clf
+
+            # 2. Normalized forward slash path (fixes Windows backslash issues in OpenCV C++)
+            fwd_path = os.path.normpath(xml_path).replace("\\", "/")
+            if clf.load(fwd_path) and not clf.empty():
+                return clf
+
+            # 3. Safe temp copy (fixes Windows spaces in username e.g. "C:\Users\Naina Video\...")
+            import tempfile, shutil
+            safe_name = os.path.basename(xml_path)
+            temp_dir = os.path.join(tempfile.gettempdir(), "photoflow_models")
+            os.makedirs(temp_dir, exist_ok=True)
+            temp_xml = os.path.join(temp_dir, safe_name)
+            shutil.copy2(xml_path, temp_xml)
+            temp_fwd = temp_xml.replace("\\", "/")
+            if clf.load(temp_fwd) and not clf.empty():
+                return clf
+        except Exception:
+            pass
+        return None
+
     def __init__(self):
         cv_data_path = getattr(cv2, 'data', None)
         haarcascades_dir = getattr(cv_data_path, 'haarcascades', '') if cv_data_path else ''
+        curr_dir = os.path.dirname(os.path.abspath(__file__))
+        backend_data = os.path.join(os.path.dirname(curr_dir), "data")
 
         possible_dirs = [
+            backend_data,
             haarcascades_dir,
+            os.path.join(getattr(sys, '_MEIPASS', ''), 'backend', 'data'),
             os.path.join(getattr(sys, '_MEIPASS', ''), 'cv2', 'data'),
             os.path.join(os.path.dirname(cv2.__file__), 'data') if hasattr(cv2, '__file__') else '',
         ]
@@ -33,12 +66,14 @@ class OpenCVFaceModel(FaceModel):
                 face_xml = os.path.join(p, 'haarcascade_frontalface_default.xml')
                 eye_xml = os.path.join(p, 'haarcascade_eye.xml')
                 smile_xml = os.path.join(p, 'haarcascade_smile.xml')
+
                 if os.path.exists(face_xml) and self.face_cascade is None:
-                    self.face_cascade = cv2.CascadeClassifier(face_xml)
+                    self.face_cascade = self._safe_load_cascade(face_xml)
                 if os.path.exists(eye_xml) and self.eye_cascade is None:
-                    self.eye_cascade = cv2.CascadeClassifier(eye_xml)
+                    self.eye_cascade = self._safe_load_cascade(eye_xml)
                 if os.path.exists(smile_xml) and self.smile_cascade is None:
-                    self.smile_cascade = cv2.CascadeClassifier(smile_xml)
+                    self.smile_cascade = self._safe_load_cascade(smile_xml)
+
                 if self.face_cascade is not None:
                     break
 
