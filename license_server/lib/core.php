@@ -426,7 +426,7 @@ function apf_check_coupon($code, $plan) {
 
 // ------------------------------------------------------------------
 // Customers & referrals: one customer = same computer, email or mobile number.
-// A partner's coupon gives a discount ONCE (first purchase, monthly plan); the partner who referred the
+// A partner's coupon gives a discount ONCE (first purchase, monthly or yearly); the partner who referred the
 // customer first earns commission on every later payment of that customer, coupon or not.
 // ------------------------------------------------------------------
 function apf_phone_key($phone) {
@@ -468,9 +468,6 @@ function apf_quote($plan, $cycle, $currency, $couponCode, $customer = null) {
     if ($base === null) return ['ok' => false, 'error' => 'Invalid plan or billing cycle'];
     list($coupon, $err) = apf_check_coupon($couponCode, $plan);
     if ($err) return ['ok' => false, 'error' => $err];
-    if ($coupon && $cycle !== 'monthly') {
-        return ['ok' => false, 'error' => 'Coupon codes work on the monthly plan only (first month).'];
-    }
     $history = is_array($customer) ? apf_customer_paid_orders($customer['mid'] ?? '', $customer['email'] ?? '', $customer['phone'] ?? '') : [];
     if ($coupon && $history) {
         return ['ok' => false, 'error' => 'Coupon codes work only on the first purchase. Please continue without the coupon.'];
