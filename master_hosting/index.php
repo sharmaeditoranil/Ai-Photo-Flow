@@ -97,11 +97,17 @@ function pf_require_app($allowExpired = false) {
     $parts = explode('.', $token);
     $payload = null;
     if (count($parts) === 2 && !function_exists('sodium_crypto_sign_verify_detached')) {
-        // Host has PHP sodium switched off: use the pure-PHP sodium_compat bundled with the License Server
-        $compat = rtrim($_SERVER['DOCUMENT_ROOT'] ?? '', '/') . '/license/lib/sodium_compat/autoload.php';
-        if (is_file($compat)) {
-            require_once $compat;
-            ParagonIE_Sodium_Compat::$disableFallbackForUnitTests = true;  // pure-PHP path, native is unavailable
+        // Host has PHP sodium switched off: use the pure-PHP sodium_compat bundled with the License Server.
+        // Album server inside the license subdomain (license.aiphotoflow.in/album) -> ../lib; license server at the
+        // site root -> /lib; older layout with the license server in /license -> /license/lib.
+        $root = rtrim($_SERVER['DOCUMENT_ROOT'] ?? '', '/');
+        foreach ([__DIR__ . '/../lib/sodium_compat/autoload.php', $root . '/lib/sodium_compat/autoload.php',
+                  $root . '/license/lib/sodium_compat/autoload.php'] as $compat) {
+            if (is_file($compat)) {
+                require_once $compat;
+                ParagonIE_Sodium_Compat::$disableFallbackForUnitTests = true;  // pure-PHP path, native is unavailable
+                break;
+            }
         }
     }
     if (count($parts) === 2 && (function_exists('sodium_crypto_sign_verify_detached') || class_exists('ParagonIE_Sodium_Compat'))) {
