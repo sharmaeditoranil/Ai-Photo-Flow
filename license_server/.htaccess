@@ -1,4 +1,10 @@
 Options -Indexes
+
+# Private server: never in search results (admin, API and client albums)
+<IfModule mod_headers.c>
+    Header set X-Robots-Tag "noindex, nofollow, noarchive"
+</IfModule>
+
 <FilesMatch "\.(sqlite|sqlite-wal|sqlite-shm|json|log|md|txt)$">
     <IfModule mod_authz_core.c>
         Require all denied
@@ -7,3 +13,13 @@ Options -Indexes
         Deny from all
     </IfModule>
 </FilesMatch>
+
+# robots.txt must stay readable: a blocked robots.txt makes search engines crawl everything
+<Files "robots.txt">
+    <IfModule mod_authz_core.c>
+        Require all granted
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Allow from all
+    </IfModule>
+</Files>

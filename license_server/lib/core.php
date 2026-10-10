@@ -18,6 +18,9 @@ const APF_CYCLES = ['monthly' => 30, 'yearly' => 365, 'lifetime' => null];
 // ------------------------------------------------------------------
 // Private data directory (outside public_html whenever possible)
 // ------------------------------------------------------------------
+// Admin and API are private: never in search results
+if (!headers_sent()) header('X-Robots-Tag: noindex, nofollow, noarchive');
+
 function apf_data_dir() {
     static $dir = null;
     if ($dir !== null) return $dir;

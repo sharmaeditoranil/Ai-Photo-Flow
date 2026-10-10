@@ -28,6 +28,11 @@
     php_value max_execution_time 300
 </IfModule>
 
+# Client albums are private: never in search results
+<IfModule mod_headers.c>
+    Header set X-Robots-Tag "noindex, nofollow, noarchive"
+</IfModule>
+
 # Protect Data Directory
 <FilesMatch "\.(json|db|sqlite)$">
     # Deny direct access to data json files if requested directly
