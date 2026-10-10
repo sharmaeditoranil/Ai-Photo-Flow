@@ -102,6 +102,9 @@ class PerceptualDuplicateModel(DuplicateDetectionModel):
     def extract_filename_number(fn: str) -> Optional[int]:
         """Extracts the primary integer sequence from filename (e.g. _P_K5188.JPG -> 5188)"""
         match = re.search(r'(\d{3,7})', fn)
+        if not match:
+            # Short counters at the end of the name (e.g. "Mandap_Burst_02.jpg")
+            match = re.search(r'(\d{1,2})(?=\.[A-Za-z0-9]+$|$)', fn)
         if match:
             try:
                 return int(match.group(1))

@@ -73,8 +73,9 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
         e.preventDefault();
         onUpdateSelection(photo.id, 'BEST');
       } else if (e.key.toUpperCase() === 'P' && photo) {
+        // "Pick" now means AI Best (the separate Selected category was removed)
         e.preventDefault();
-        onUpdateSelection(photo.id, 'SELECTED');
+        onUpdateSelection(photo.id, 'BEST');
       } else if (e.key.toUpperCase() === 'R' && photo) {
         e.preventDefault();
         onUpdateSelection(photo.id, 'REVIEW');
@@ -516,26 +517,6 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
             <span>Best (B)</span>
           </button>
 
-          <button
-            onClick={() => onUpdateSelection(photo.id, 'SELECTED')}
-            style={{
-              background: (photo.user_selection === 'SELECTED' || (photo.user_selection === 'UNRATED' && photo.ai_recommendation === 'SELECTED')) ? '#10b981' : '#1c222d',
-              color: (photo.user_selection === 'SELECTED' || (photo.user_selection === 'UNRATED' && photo.ai_recommendation === 'SELECTED')) ? '#fff' : '#cbd5e1',
-              border: (photo.user_selection === 'SELECTED' || (photo.user_selection === 'UNRATED' && photo.ai_recommendation === 'SELECTED')) ? '1px solid #059669' : '1px solid #2e3748',
-              borderRadius: '6px',
-              padding: '6px 14px',
-              fontSize: '12px',
-              fontWeight: 600,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px'
-            }}
-            title="Pick / Select photo (Key: P)"
-          >
-            <Check size={14} />
-            <span>Pick (P)</span>
-          </button>
 
           <button
             onClick={() => onUpdateSelection(photo.id, 'REVIEW')}

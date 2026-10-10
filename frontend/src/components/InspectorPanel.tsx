@@ -3,6 +3,8 @@ import { Photo, EditParameters, UserSelection } from '../types';
 import { Histogram } from './Histogram';
 import { api } from '../api';
 import { WEDDING_PRESETS } from '../presets';
+import { RetouchPanel } from './RetouchPanel';
+import { WhiteBalanceCard } from './WhiteBalanceCard';
 
 import {
   Sparkles, RotateCcw, Sliders, ShieldCheck,
@@ -20,6 +22,8 @@ interface InspectorPanelProps {
   onUpdateSelection?: (photoId: number, selection: UserSelection) => void;
   selectedStylePreset?: string;
   onSelectStylePreset?: (presetName: string) => void;
+  autoEditRetouchPreset?: string;
+  onSelectAutoEditRetouchPreset?: (presetName: string) => void;
 }
 
 export const InspectorPanel: React.FC<InspectorPanelProps> = ({
@@ -30,6 +34,8 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onUpdateSelection,
   selectedStylePreset,
   onSelectStylePreset,
+  autoEditRetouchPreset,
+  onSelectAutoEditRetouchPreset,
 }) => {
 
   if (!photo) {
@@ -42,6 +48,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
 
   const defaultEdits: EditParameters = {
     exposure: 0,
+    subject_exposure: 0,
     temperature: 0,
     tint: 0,
     contrast: 0,
@@ -60,7 +67,10 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     heal_face_preset: 'AUTO',
     skin_smoothing: 0,
     dodge_burn: 0,
-    heal_spots: []
+    skin_glow: 0,
+    heal_spots: [],
+    retouch: null,
+    auto_wb: null
   };
 
   const edits: EditParameters = {
@@ -210,7 +220,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           </span>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px', marginBottom: '8px' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '6px', marginBottom: '8px' }}>
           <button
             onClick={() => onUpdateSelection?.(photo.id, 'BEST')}
             style={{
@@ -239,33 +249,6 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             Best (B)
           </button>
 
-          <button
-            onClick={() => onUpdateSelection?.(photo.id, 'SELECTED')}
-            style={{
-              padding: '6px 8px',
-              borderRadius: '5px',
-              border: (photo.user_selection === 'SELECTED' || (photo.user_selection === 'UNRATED' && photo.ai_recommendation === 'SELECTED'))
-                ? '1px solid #10b981'
-                : '1px solid #232733',
-              background: (photo.user_selection === 'SELECTED' || (photo.user_selection === 'UNRATED' && photo.ai_recommendation === 'SELECTED'))
-                ? 'rgba(16, 185, 129, 0.2)'
-                : '#181b22',
-              color: (photo.user_selection === 'SELECTED' || (photo.user_selection === 'UNRATED' && photo.ai_recommendation === 'SELECTED'))
-                ? '#34d399'
-                : '#cbd5e1',
-              fontSize: '11px',
-              fontWeight: 600,
-              cursor: 'pointer',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: '5px'
-            }}
-            title="Pick / Select photo (Key: P)"
-          >
-            <CheckCircle size={12} />
-            Pick (P)
-          </button>
 
           <button
             onClick={() => onUpdateSelection?.(photo.id, 'REVIEW')}
@@ -609,73 +592,28 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
         </div>
       </div>
 
+      {/* 3.3. AI Auto White Balance */}
+      <WhiteBalanceCard wb={edits.auto_wb} onCommit={(wb) => handleParamChange('auto_wb', wb)} />
+
+      {/* 3.4. AI Skin Retouch (Heal, Mattifier, Skin Mask, Smoothing, Imperfections, Skin Tone) */}
+      <RetouchPanel
+        edits={edits}
+        onCommit={(retouch) => handleParamChange('retouch', retouch)}
+        autoEditPreset={autoEditRetouchPreset ?? 'Natural'}
+        onSelectAutoEditPreset={(name) => onSelectAutoEditRetouchPreset?.(name)}
+      />
+
       {/* 3.5. Portrait & Skin Enhancement */}
       <div style={{ padding: '14px', borderBottom: '1px solid #1c202a', background: 'linear-gradient(180deg, #131720 0%, #11141b 100%)' }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
             <Sparkles size={14} style={{ color: '#38bdf8' }} />
             <span style={{ fontSize: '11px', fontWeight: 700, color: '#f1f5f9', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-              Portrait &amp; Skin Enhancement
+              Portrait Depth
             </span>
           </div>
-          <span style={{ fontSize: '9.5px', background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8', padding: '2px 6px', borderRadius: '4px', fontWeight: 600, border: '1px solid rgba(56, 189, 248, 0.3)' }}>
-            Natural Glow
-          </span>
         </div>
 
-
-        {/* SkinFiner-Style Skin Smoothing Slider */}
-        <div className="slider-group" style={{ marginBottom: '12px', paddingTop: '8px', borderTop: '1px dashed #232836' }}>
-          <div className="slider-header">
-            <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
-              <span style={{ fontWeight: 600, color: '#e2e8f0' }}>Skin Smoothing (SkinFiner)</span>
-              <span style={{ fontSize: '10px', color: '#64748b' }}>(स्किन स्मूथनेस)</span>
-            </span>
-            <span className="slider-val" style={{ color: (edits.skin_smoothing ?? 0) > 0 ? '#38bdf8' : '#94a3b8' }}>
-              {(edits.skin_smoothing ?? 0) > 0 ? `${Math.round(edits.skin_smoothing ?? 0)}%` : 'Off'}
-            </span>
-          </div>
-          <input
-            type="range"
-            min="0"
-            max="100"
-            step="5"
-            value={edits.skin_smoothing ?? 0}
-            onChange={(e) => handleSliderChange('skin_smoothing' as any, parseFloat(e.target.value))}
-            style={{ accentColor: '#38bdf8' }}
-          />
-
-          {/* Quick preset buttons */}
-          <div style={{ display: 'flex', gap: '4px', marginTop: '6px' }}>
-            {[
-              { label: 'Off', val: 0 },
-              { label: 'Light', val: 20 },
-              { label: 'Natural', val: 35 },
-              { label: 'Medium', val: 50 },
-            ].map(lvl => (
-              <button
-                key={lvl.val}
-                type="button"
-                onClick={() => handleSliderChange('skin_smoothing' as any, lvl.val)}
-                style={{
-                  flex: 1,
-                  padding: '3px 0',
-                  fontSize: '9.5px',
-                  borderRadius: '4px',
-                  border: (edits.skin_smoothing ?? 0) === lvl.val ? '1px solid #38bdf8' : '1px solid #232836',
-                  background: (edits.skin_smoothing ?? 0) === lvl.val ? 'rgba(56, 189, 248, 0.2)' : '#181b22',
-                  color: (edits.skin_smoothing ?? 0) === lvl.val ? '#38bdf8' : '#94a3b8',
-                  cursor: 'pointer'
-                }}
-              >
-                {lvl.label}
-              </button>
-            ))}
-          </div>
-          <div style={{ fontSize: '9.5px', color: '#64748b', marginTop: '4px', lineHeight: '1.3' }}>
-            SkinFiner frequency separation: smooths uneven skin tone while preserving authentic skin pores. Eyes, lips & hair are untouched.
-          </div>
-        </div>
 
         {/* AI Portrait Dodge & Burn (3D Depth & Glow) Slider */}
         <div className="slider-group" style={{ marginBottom: '12px', paddingTop: '8px', borderTop: '1px dashed #232836' }}>
@@ -730,6 +668,57 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           </div>
         </div>
 
+        {/* Skin Glow: soft radiance on real skin only */}
+        <div className="slider-group" style={{ marginBottom: '12px', paddingTop: '8px', borderTop: '1px dashed #232836' }}>
+          <div className="slider-header">
+            <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+              <span style={{ fontWeight: 600, color: '#e2e8f0' }}>Skin Glow</span>
+              <span style={{ fontSize: '10px', color: '#64748b' }}>(स्किन ग्लो)</span>
+            </span>
+            <span className="slider-val" style={{ color: (edits.skin_glow ?? 0) > 0 ? '#f472b6' : '#94a3b8' }}>
+              {(edits.skin_glow ?? 0) > 0 ? `${Math.round(edits.skin_glow ?? 0)}%` : 'Off'}
+            </span>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="5"
+            value={edits.skin_glow ?? 0}
+            onChange={(e) => handleSliderChange('skin_glow' as any, parseFloat(e.target.value))}
+            style={{ accentColor: '#f472b6' }}
+          />
+          <div style={{ display: 'flex', gap: '4px', marginTop: '6px' }}>
+            {[
+              { label: 'Off', val: 0 },
+              { label: 'Light', val: 40 },
+              { label: 'Natural', val: 65 },
+              { label: 'Radiant', val: 90 },
+            ].map(lvl => (
+              <button
+                key={lvl.val}
+                type="button"
+                onClick={() => handleSliderChange('skin_glow' as any, lvl.val)}
+                style={{
+                  flex: 1,
+                  padding: '3px 0',
+                  fontSize: '9.5px',
+                  borderRadius: '4px',
+                  border: (edits.skin_glow ?? 0) === lvl.val ? '1px solid #f472b6' : '1px solid #232836',
+                  background: (edits.skin_glow ?? 0) === lvl.val ? 'rgba(244, 114, 182, 0.18)' : '#181b22',
+                  color: (edits.skin_glow ?? 0) === lvl.val ? '#f9a8d4' : '#94a3b8',
+                  cursor: 'pointer'
+                }}
+              >
+                {lvl.label}
+              </button>
+            ))}
+          </div>
+          <div style={{ fontSize: '9.5px', color: '#64748b', marginTop: '4px', lineHeight: '1.3' }}>
+            Soft radiance on skin only (eyes, lips, hair, clothes and background are untouched). Overall light does not change.
+          </div>
+        </div>
+
       </div>
 
 
@@ -765,6 +754,22 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             step="0.05"
             value={edits.exposure}
             onChange={(e) => handleSliderChange('exposure', parseFloat(e.target.value))}
+          />
+        </div>
+
+        {/* Subject Light: brightness of the detected subject only (background unchanged) */}
+        <div className="slider-group">
+          <div className="slider-header">
+            <span title="Changes light only on the detected subject (faces / people). Background stays as it is.">Subject Light</span>
+            <span className="slider-val">{(edits.subject_exposure ?? 0) > 0 ? `+${(edits.subject_exposure ?? 0).toFixed(2)}` : (edits.subject_exposure ?? 0).toFixed(2)} EV</span>
+          </div>
+          <input
+            type="range"
+            min="-1.2"
+            max="0.5"
+            step="0.05"
+            value={edits.subject_exposure ?? 0}
+            onChange={(e) => handleSliderChange('subject_exposure', parseFloat(e.target.value))}
           />
         </div>
 

@@ -44,6 +44,15 @@ class OpenCVQualityModel(ImageQualityModel):
         norm_sharpness = min(100.0, max(0.0, (np.log1p(raw_variance) / np.log1p(2500.0)) * 100.0))
         blur_detected = raw_variance < self.blur_threshold
 
+        # Focus of the sharpest area (8x8 tiles, 95th percentile): a ring / mehndi / decor close-up with a
+        # blurred background is still in focus. Light denoise first so high-ISO grain doesn't count as detail.
+        den_lap = cv2.Laplacian(cv2.GaussianBlur(gray, (3, 3), 0.8), cv2.CV_64F)
+        gh, gw = gray.shape[:2]
+        tile_vars = [den_lap[i * gh // 8:(i + 1) * gh // 8, j * gw // 8:(j + 1) * gw // 8].var()
+                     for i in range(8) for j in range(8)]
+        focus_var = float(np.percentile(tile_vars, 95))
+        focus_sharpness = min(100.0, max(0.0, (np.log1p(focus_var) / np.log1p(2500.0)) * 100.0))
+
         # 2. Exposure & Luminance Analysis
         mean_lum = float(np.mean(gray))
         total_pixels = float(gray.size)
@@ -94,5 +103,6 @@ class OpenCVQualityModel(ImageQualityModel):
             exposure_status=exposure_status,
             exposure_score=round(exposure_score, 1),
             dynamic_range_score=round(dr_score, 1),
-            overall_quality=round(float(overall_quality), 1)
+            overall_quality=round(float(overall_quality), 1),
+            focus_sharpness=round(float(focus_sharpness), 1)
         )

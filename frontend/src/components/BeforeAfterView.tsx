@@ -1,5 +1,5 @@
-import React, { useState, useRef } from 'react';
-import { Photo, EditParameters } from '../types';
+import React, { useState, useRef, useEffect } from 'react';
+import { Photo, EditParameters, RetouchMaskKind } from '../types';
 import { api } from '../api';
 import {
   Columns, SplitSquareVertical, RotateCcw, Sparkles
@@ -22,6 +22,21 @@ export const BeforeAfterView: React.FC<BeforeAfterViewProps> = ({
   const [splitPos, setSplitPos] = useState<number>(50); // 0 to 100
   const [viewMode, setViewMode] = useState<'split' | 'side-by-side'>('split');
   const [isDragging, setIsDragging] = useState<boolean>(false);
+  const [maskKind, setMaskKind] = useState<RetouchMaskKind>('off');
+
+  // M cycles the retouch mask overlay: off -> skin -> heal -> shine
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key === 'm' || e.key === 'M') {
+        const order: RetouchMaskKind[] = ['off', 'skin', 'heal', 'shine'];
+        setMaskKind(k => order[(order.indexOf(k) + 1) % order.length]);
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
 
   const containerRef = useRef<HTMLDivElement>(null);
   const editedImgRef = useRef<HTMLImageElement>(null);
@@ -41,6 +56,29 @@ export const BeforeAfterView: React.FC<BeforeAfterViewProps> = ({
 
   const origUrl = api.getOriginalUrl(photo.id);
   const editedUrl = api.getPreviewUrl(photo.id, previewTimestamp);
+  const maskColors: Record<Exclude<RetouchMaskKind, 'off'>, string> = {
+    skin: 'rgba(34, 197, 94, 0.55)',
+    heal: 'rgba(250, 204, 21, 0.85)',
+    shine: 'rgba(56, 189, 248, 0.7)',
+  };
+  const maskOverlay = maskKind === 'off' ? null : (
+    <div
+      style={{
+        position: 'absolute', inset: 0, pointerEvents: 'none', zIndex: 10,
+        background: maskColors[maskKind],
+        WebkitMaskImage: `url(${api.getRetouchMaskUrl(photo.id, maskKind, previewTimestamp)})`,
+        WebkitMaskSize: 'contain',
+        WebkitMaskRepeat: 'no-repeat',
+        WebkitMaskPosition: 'center',
+        WebkitMaskMode: 'luminance',
+        maskImage: `url(${api.getRetouchMaskUrl(photo.id, maskKind, previewTimestamp)})`,
+        maskSize: 'contain',
+        maskRepeat: 'no-repeat',
+        maskPosition: 'center',
+        maskMode: 'luminance',
+      } as React.CSSProperties}
+    />
+  );
 
   return (
     <div style={{ flex: 1, display: 'flex', flexDirection: 'column', height: '100%', background: '#0a0b0e', userSelect: 'none' }}>
@@ -104,6 +142,25 @@ export const BeforeAfterView: React.FC<BeforeAfterViewProps> = ({
             </button>
           </div>
 
+          {/* Retouch mask overlay */}
+          <div style={{ display: 'flex', alignItems: 'center', background: '#1c1f26', padding: '2px', borderRadius: '6px', border: '1px solid #282d3b' }} title="Show where AI Skin Retouch applies (key: M)">
+            <span style={{ fontSize: '10px', color: '#64748b', padding: '0 6px' }}>Mask</span>
+            {(['off', 'skin', 'heal', 'shine'] as RetouchMaskKind[]).map(k => (
+              <button
+                key={k}
+                onClick={() => setMaskKind(k)}
+                style={{
+                  padding: '4px 8px', borderRadius: '4px', border: 'none', fontSize: '11px', cursor: 'pointer',
+                  background: maskKind === k ? '#3b82f6' : 'transparent',
+                  color: maskKind === k ? '#fff' : '#94a3b8',
+                  textTransform: 'capitalize'
+                }}
+              >
+                {k}
+              </button>
+            ))}
+          </div>
+
           {/* Quick Actions */}
           <button
             onClick={() => onAutoEditSingle(photo.id)}
@@ -162,6 +219,7 @@ export const BeforeAfterView: React.FC<BeforeAfterViewProps> = ({
                 left: 0
               }}
             />
+            {maskOverlay}
 
             {/* Foreground: Original Photo (Clipped by split position) */}
             <div style={{
@@ -260,6 +318,7 @@ export const BeforeAfterView: React.FC<BeforeAfterViewProps> = ({
               </div>
               <div style={{ flex: 1, position: 'relative' }}>
                 <img src={editedUrl} alt="Edited" style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
+                {maskOverlay}
               </div>
             </div>
           </div>

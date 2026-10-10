@@ -10,7 +10,6 @@ interface PricingModalProps {
   isOpen: boolean;
   onClose: () => void;
   onLicenseUpdated?: (license: LicenseStatus) => void;
-  onOpenAdminSettings?: () => void;
 }
 
 declare global {
@@ -22,8 +21,7 @@ declare global {
 export const PricingModal: React.FC<PricingModalProps> = ({
   isOpen,
   onClose,
-  onLicenseUpdated,
-  onOpenAdminSettings
+  onLicenseUpdated
 }) => {
   const [activeTab, setActiveTab] = useState<'plans' | 'activate'>('plans');
   const [currency, setCurrency] = useState<'INR' | 'USD'>('INR');
@@ -48,11 +46,23 @@ export const PricingModal: React.FC<PricingModalProps> = ({
   // Offline Key activation state
   const [inputKey, setInputKey] = useState('');
 
+  // Live prices from the License Server (owner changes them in the Admin Panel)
+  const [serverPrices, setServerPrices] = useState<any | null>(null);
+  const [paymentsEnabled, setPaymentsEnabled] = useState<boolean>(true);
+  const [trialDays, setTrialDays] = useState<number>(3);
+
   useEffect(() => {
     if (isOpen) {
       loadLicense();
       setStatusMessage(null);
       loadRazorpayScript();
+      api.getLicensePlans().then((res) => {
+        if (res && res.ok) {
+          setServerPrices(res.prices);
+          setPaymentsEnabled(!!res.payments_enabled);
+          if (typeof res.trial_days === 'number') setTrialDays(res.trial_days);
+        }
+      }).catch(() => {});
     }
   }, [isOpen]);
 
@@ -69,6 +79,10 @@ export const PricingModal: React.FC<PricingModalProps> = ({
     try {
       const data = await api.getLicenseStatus();
       setLicense(data);
+      // Renewal: prefill buyer details from the current license
+      if (data?.user_name) setClientName((v) => v || data.user_name);
+      if (data?.user_email) setClientEmail((v) => v || data.user_email);
+      if (data?.user_phone) setClientPhone((v) => v || data.user_phone);
     } catch (err) {
       console.error('Failed to load license status', err);
     }
@@ -76,7 +90,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
 
   if (!isOpen) return null;
 
-  // Base Prices
+  // Fallback display prices if the server can't be reached (the server always decides the real amount)
   const basePrices = {
     INR: {
       pro_monthly: 499,
@@ -95,7 +109,14 @@ export const PricingModal: React.FC<PricingModalProps> = ({
   };
 
   const currSymbol = currency === 'INR' ? '₹' : '$';
-  const currPrices = basePrices[currency];
+  const sp = serverPrices && serverPrices[currency];
+  const currPrices = sp ? {
+    ...basePrices[currency],
+    pro_monthly: sp.PRO?.monthly ?? basePrices[currency].pro_monthly,
+    pro_yearly: sp.PRO?.yearly ?? basePrices[currency].pro_yearly,
+    studio_monthly: sp.STUDIO?.monthly ?? basePrices[currency].studio_monthly,
+    studio_yearly: sp.STUDIO?.yearly ?? basePrices[currency].studio_yearly,
+  } : basePrices[currency];
 
   // Calculate pricing with applied referral discount
   const getPlanPrice = (plan: 'pro' | 'studio') => {
@@ -135,19 +156,35 @@ export const PricingModal: React.FC<PricingModalProps> = ({
 
   // Launch Razorpay Checkout & Automatic Access
   const handlePayWithRazorpay = async (planId: 'PRO' | 'STUDIO') => {
+    if (!clientName.trim() || clientPhone.replace(/\D/g, '').length < 10 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(clientEmail.trim())) {
+      setStatusMessage({ text: 'Please fill Your details at the top: name, 10-digit mobile number and a valid email.', type: 'error' });
+      return;
+    }
     setIsProcessingPayment(true);
     setStatusMessage(null);
 
     try {
-      // 1. Create order on backend
+      // 1. The License Server creates the Razorpay order with its own price + coupon check
       const order = await api.createRazorpayOrder(
         planId,
         billingCycle,
-        clientName || 'Subscriber',
-        clientEmail || 'client@example.com',
+        clientName.trim(),
+        clientEmail.trim(),
+        clientPhone.trim(),
         appliedCoupon?.code,
         currency
       );
+
+      if (order.free) {
+        // 100% coupon: license already issued by the server
+        setIsProcessingPayment(false);
+        setStatusMessage({ text: order.message || 'License activated!', type: 'success' });
+        if (order.license) {
+          setLicense(order.license);
+          if (onLicenseUpdated) onLicenseUpdated(order.license);
+        }
+        return;
+      }
 
       // Load Razorpay JS SDK dynamically if not already available
       const loadRazorpayScript = (): Promise<boolean> => {
@@ -178,9 +215,9 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         key: order.key_id,
         amount: order.amount,
         currency: order.currency,
-        name: 'Ai PhotoFlow',
-        description: `${planId} Plan (${billingCycle}) - Official License`,
-        order_id: order.order_id.startsWith('order_') && !order.is_test_mode ? order.order_id : undefined,
+        name: order.name || 'Ai PhotoFlow',
+        description: order.description || `${planId} Plan (${billingCycle})`,
+        order_id: order.order_id,
         prefill: {
           name: clientName || '',
           email: clientEmail || '',
@@ -193,20 +230,20 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           ondismiss: function () {
             setIsProcessingPayment(false);
             setStatusMessage({
-              text: 'Payment cancelled. Your plan was not changed.',
+              text: 'Payment window closed. If money was deducted, your license activates automatically within a few minutes.',
               type: 'info'
             });
+            // Pick up a license the server may have created via the Razorpay webhook
+            setTimeout(() => { api.refreshLicense().then((lic) => { setLicense(lic); if (onLicenseUpdated) onLicenseUpdated(lic); }).catch(() => {}); }, 4000);
           }
         },
         handler: async function (response: any) {
           try {
             // Verify real payment on backend with cryptographic signature
             const verifyRes = await api.verifyRazorpayPayment(
-              order.order_id,
+              response.razorpay_order_id || order.order_id,
               response.razorpay_payment_id,
-              response.razorpay_signature,
-              clientName,
-              clientEmail
+              response.razorpay_signature
             );
 
             setStatusMessage({
@@ -236,6 +273,25 @@ export const PricingModal: React.FC<PricingModalProps> = ({
     } catch (err: any) {
       setIsProcessingPayment(false);
       setStatusMessage({ text: err.message || 'Failed to initiate payment', type: 'error' });
+    }
+  };
+
+  // Free this computer's seat so the license can be moved to another computer
+  const handleDeactivate = async () => {
+    if (!window.confirm('Remove the license from this computer? You can then activate the same key on another computer.')) return;
+    setIsLoading(true);
+    setStatusMessage(null);
+    try {
+      const res = await api.deactivateLicense();
+      setStatusMessage({ text: res.message, type: 'success' });
+      if (res.license) {
+        setLicense(res.license);
+        if (onLicenseUpdated) onLicenseUpdated(res.license);
+      }
+    } catch (err: any) {
+      setStatusMessage({ text: err.message || 'Could not remove license', type: 'error' });
+    } finally {
+      setIsLoading(false);
     }
   };
 
@@ -344,7 +400,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                   padding: '3px 8px',
                   borderRadius: '12px'
                 }}>
-                  Free Trial ({license?.days_left ?? 14} Days Left)
+                  Free Trial ({(license?.days_left ?? 0) >= 1 ? `${license?.days_left} Days` : `${(license as any)?.hours_left ?? 0} Hours`} Left)
                 </span>
               )}
             </div>
@@ -444,6 +500,49 @@ export const PricingModal: React.FC<PricingModalProps> = ({
         <div style={{ padding: '20px 24px', overflowY: 'auto', flex: 1 }}>
           {activeTab === 'plans' && (
             <div>
+              {/* Buyer details: saved with the license and shown in My Profile */}
+              <div style={{ background: '#151923', border: '1px solid #283042', borderRadius: '10px', padding: '14px 18px', marginBottom: '16px' }}>
+                <div style={{ fontSize: '13px', fontWeight: 600, marginBottom: '2px' }}>Your details</div>
+                <div style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '10px' }}>
+                  Your license and invoice are linked to these details. They appear in My Profile.
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(170px, 1fr))', gap: '10px' }}>
+                  <div>
+                    <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Name *</label>
+                    <input
+                      type="text"
+                      value={clientName}
+                      onChange={(e) => setClientName(e.target.value)}
+                      placeholder="Studio / your full name"
+                      style={{ width: '100%', boxSizing: 'border-box', background: '#0d1017', border: '1px solid #2d3748', borderRadius: '6px',
+                        padding: '8px 10px', fontSize: '12px', color: '#f8fafc', outline: 'none' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Mobile number *</label>
+                    <input
+                      type="tel"
+                      value={clientPhone}
+                      onChange={(e) => setClientPhone(e.target.value)}
+                      placeholder="10-digit mobile number"
+                      style={{ width: '100%', boxSizing: 'border-box', background: '#0d1017', border: '1px solid #2d3748', borderRadius: '6px',
+                        padding: '8px 10px', fontSize: '12px', color: '#f8fafc', outline: 'none' }}
+                    />
+                  </div>
+                  <div>
+                    <label style={{ fontSize: '11px', color: '#94a3b8', display: 'block', marginBottom: '4px' }}>Email *</label>
+                    <input
+                      type="email"
+                      value={clientEmail}
+                      onChange={(e) => setClientEmail(e.target.value)}
+                      placeholder="you@example.com"
+                      style={{ width: '100%', boxSizing: 'border-box', background: '#0d1017', border: '1px solid #2d3748', borderRadius: '6px',
+                        padding: '8px 10px', fontSize: '12px', color: '#f8fafc', outline: 'none' }}
+                    />
+                  </div>
+                </div>
+              </div>
+
               {/* Toggles: Currency & Billing */}
               <div style={{
                 display: 'flex',
@@ -574,7 +673,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                   <div style={{ fontSize: '14px', fontWeight: 600, color: '#94a3b8' }}>Starter Trial</div>
                   <div style={{ margin: '8px 0', display: 'flex', alignItems: 'baseline', gap: '4px' }}>
                     <span style={{ fontSize: '26px', fontWeight: 800 }}>{currSymbol}0</span>
-                    <span style={{ fontSize: '12px', color: '#64748b' }}>/ 14 Days</span>
+                    <span style={{ fontSize: '12px', color: '#64748b' }}>/ {trialDays} {trialDays === 1 ? 'Day' : 'Days'}</span>
                   </div>
                   <p style={{ fontSize: '11px', color: '#94a3b8', minHeight: '32px' }}>
                     Perfect for testing Ai PhotoFlow on your first wedding project.
@@ -683,7 +782,8 @@ export const PricingModal: React.FC<PricingModalProps> = ({
 
                   <button
                     onClick={() => handlePayWithRazorpay('PRO')}
-                    disabled={isProcessingPayment}
+                    disabled={isProcessingPayment || !paymentsEnabled}
+                    title={paymentsEnabled ? '' : 'Online payment is not available right now'}
                     style={{
                       width: '100%',
                       padding: '11px',
@@ -702,7 +802,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                     }}
                   >
                     <CreditCard size={15} />
-                    <span>{isProcessingPayment ? 'Processing...' : 'Pay with Razorpay (Instant)'}</span>
+                    <span>{!paymentsEnabled ? 'Online payment unavailable' : isProcessingPayment ? 'Processing...' : 'Pay with Razorpay (Instant)'}</span>
                   </button>
                   <div style={{ textAlign: 'center', fontSize: '10px', color: '#94a3b8', marginTop: '6px' }}>
                     ⚡ UPI • Google Pay • PhonePe • Cards • NetBanking
@@ -756,7 +856,8 @@ export const PricingModal: React.FC<PricingModalProps> = ({
 
                   <button
                     onClick={() => handlePayWithRazorpay('STUDIO')}
-                    disabled={isProcessingPayment}
+                    disabled={isProcessingPayment || !paymentsEnabled}
+                    title={paymentsEnabled ? '' : 'Online payment is not available right now'}
                     style={{
                       width: '100%',
                       padding: '11px',
@@ -774,7 +875,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                     }}
                   >
                     <CreditCard size={14} />
-                    <span>{isProcessingPayment ? 'Processing...' : 'Pay with Razorpay (Instant)'}</span>
+                    <span>{!paymentsEnabled ? 'Online payment unavailable' : isProcessingPayment ? 'Processing...' : 'Pay with Razorpay (Instant)'}</span>
                   </button>
                   <div style={{ textAlign: 'center', fontSize: '10px', color: '#94a3b8', marginTop: '6px' }}>
                     ⚡ UPI • Google Pay • PhonePe • Cards • NetBanking
@@ -801,7 +902,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                   <div>
                     <div style={{ fontSize: '13px', fontWeight: 600 }}>Have a Referral or Discount Coupon?</div>
                     <div style={{ fontSize: '11px', color: '#94a3b8' }}>
-                      Enter referral code for instant discount before Razorpay checkout. Try: <strong style={{ color: '#60a5fa' }}>ANIL50</strong>
+                      Enter your referral / coupon code for an instant discount before checkout.
                     </div>
                   </div>
                 </div>
@@ -864,7 +965,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                 </div>
                 <h3 style={{ margin: '0 0 6px', fontSize: '17px', fontWeight: 700 }}>Already Have a License Key?</h3>
                 <p style={{ margin: 0, fontSize: '12px', color: '#94a3b8' }}>
-                  Enter the offline license key received directly from Anil Sharma / Studio Admin to activate without Razorpay.
+                  Enter the license key you received by email or from Ai PhotoFlow. Internet is needed once to activate.
                 </p>
               </div>
 
@@ -877,7 +978,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                     type="text"
                     value={inputKey}
                     onChange={(e) => setInputKey(e.target.value.toUpperCase())}
-                    placeholder="e.g. APF-PRO-YEAR-XXXX-XXXX or APF-VIP-XXXX"
+                    placeholder="APF-XXXXX-XXXXX-XXXXX-XXXXX"
                     style={{
                       width: '100%',
                       boxSizing: 'border-box',
@@ -975,7 +1076,22 @@ export const PricingModal: React.FC<PricingModalProps> = ({
                   <div style={{ fontWeight: 600, color: '#cbd5e1', marginBottom: '4px' }}>Current Machine Status:</div>
                   <div>• Plan: <strong style={{ color: '#60a5fa' }}>{license?.plan || 'Free Trial'}</strong></div>
                   <div>• Status: <span style={{ color: license?.is_active ? '#34d399' : '#f87171' }}>{license?.status || 'Active'}</span></div>
-                  <div>• Expiry: {license?.expires_at ? license.expires_at : (license?.is_vip ? 'Never (Lifetime Free Access)' : '14-Day Free Period')}</div>
+                  <div>• Expiry: {license?.expires_at ? license.expires_at : (license?.is_active ? 'Never (Lifetime)' : '—')}</div>
+                  {license?.license_key && <div>• Key: <span style={{ fontFamily: 'monospace', color: '#cbd5e1' }}>{license.license_key}</span></div>}
+                  <div>• This computer ID: <span style={{ fontFamily: 'monospace' }}>{(license as any)?.machine_id || '—'}</span></div>
+                  {(license as any)?.message && <div style={{ color: '#fbbf24', marginTop: '6px' }}>{(license as any).message}</div>}
+                  {license?.license_key && (
+                    <button
+                      onClick={handleDeactivate}
+                      disabled={isLoading}
+                      style={{
+                        marginTop: '10px', padding: '7px 12px', background: 'transparent', border: '1px solid #475569',
+                        borderRadius: '6px', color: '#cbd5e1', fontSize: '12px', cursor: 'pointer'
+                      }}
+                    >
+                      Remove license from this computer (to move it to a new computer)
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -994,18 +1110,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
           color: '#64748b'
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span
-              onClick={() => {
-                if (onOpenAdminSettings) {
-                  onClose();
-                  onOpenAdminSettings();
-                }
-              }}
-              style={{ cursor: 'pointer', display: 'flex', alignItems: 'center' }}
-              title="Admin Portal (Anil Sharma)"
-            >
-              <Lock size={13} style={{ color: '#10b981' }} />
-            </span>
+            <Lock size={13} style={{ color: '#10b981' }} />
             <span>Secure 256-bit encrypted Razorpay payment gateway</span>
           </div>
           <button

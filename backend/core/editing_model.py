@@ -7,6 +7,8 @@ import numpy as np
 from typing import Optional, Dict, Any
 from backend.core.interfaces import EditingModel, EditParameters, FaceMetrics
 from backend.core.subject_model import SubjectDetectionEngine
+from backend.retouch.params import build_preset as build_retouch_preset
+from backend.core.white_balance import analyze_white_balance
 
 class IndianWeddingEditingModel(EditingModel):
     def __init__(self):
@@ -30,7 +32,7 @@ class IndianWeddingEditingModel(EditingModel):
         "Royal Cool Blue": {
             "exp_target": 140.0,
             "contrast_bias": 4.0,
-            "temp_bias": -7.0,         # Subtle cool blue tone
+            "temp_bias": -4.0,         # Subtle cool blue tone (on top of the clean-colour finish)
             "vibrance_bias": 8.0,
             "sat_bias": 2.0,
             "highlights_bias": -20.0,
@@ -153,33 +155,53 @@ class IndianWeddingEditingModel(EditingModel):
     }
 
     def detect_straighten_angle(self, gray: np.ndarray) -> float:
-        """Detect tilt angle using Hough Line Transform on prominent horizontal/vertical lines."""
+        """Horizon / vertical tilt from LONG straight structures only (door frames, pillars, walls, horizon).
+        People, saree patterns and decor give short or random lines and never rotate a photo. A correction is
+        made only when the long lines clearly agree; max 3 degrees (a candid frame is never swung around)."""
         try:
-            edges = cv2.Canny(gray, 50, 150, apertureSize=3)
-            lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=120, minLineLength=100, maxLineGap=10)
+            h, w = gray.shape[:2]
+            small = cv2.GaussianBlur(gray, (3, 3), 0)
+            edges = cv2.Canny(small, 60, 160, apertureSize=3)
+            min_len = int(0.18 * min(h, w))
+            lines = cv2.HoughLinesP(edges, 1, np.pi / 360, threshold=80, minLineLength=min_len, maxLineGap=6)
             if lines is None:
                 return 0.0
+            vert, horiz = [], []        # (visual counter-clockwise tilt of the scene in degrees, length)
+            for x1, y1, x2, y2 in lines[:, 0, :]:
+                dx, dy = float(x2 - x1), float(y2 - y1)
+                length = float(np.hypot(dx, dy))
+                if abs(dy) >= abs(dx):                            # vertical family, point it downwards
+                    if dy < 0:
+                        dx, dy = -dx, -dy
+                    tilt = float(np.degrees(np.arctan2(dx, dy)))  # CCW scene tilt pushes the bottom end right
+                    if abs(tilt) <= 5.0:
+                        vert.append((tilt, length))
+                else:                                             # horizontal family, point it rightwards
+                    if dx < 0:
+                        dx, dy = -dx, -dy
+                    tilt = float(-np.degrees(np.arctan2(dy, dx)))  # CCW scene tilt lifts the right end (y up)
+                    if abs(tilt) <= 5.0:
+                        horiz.append((tilt, length))
 
-            angles = []
-            for line in lines:
-                x1, y1, x2, y2 = line[0]
-                dx = x2 - x1
-                dy = y2 - y1
-                angle_deg = np.degrees(np.arctan2(dy, dx))
-                # Normalize to horizontal [-45, 45]
-                while angle_deg > 45:
-                    angle_deg -= 90
-                while angle_deg < -45:
-                    angle_deg += 90
+            def consensus(items, min_total):
+                if len(items) < 3:
+                    return None
+                a = np.array([t for t, _ in items]); L = np.array([l for _, l in items])
+                if L.sum() < min_total:
+                    return None
+                order = np.argsort(a); cw = np.cumsum(L[order])
+                med = float(a[order][np.searchsorted(cw, cw[-1] / 2.0)])
+                mad = float(np.sum(np.abs(a - med) * L) / L.sum())
+                return med if mad <= 0.8 else None
 
-                # Only consider slight tilts
-                if -12.0 <= angle_deg <= 12.0:
-                    angles.append(angle_deg)
-
-            if len(angles) >= 5:
-                median_angle = float(np.median(angles))
-                if abs(median_angle) >= 0.5:
-                    return round(float(np.clip(-median_angle, -10.0, 10.0)), 1)
+            # Verticals are trustworthy at any distance; horizontals (floors, tables) suffer perspective
+            angle = consensus(vert, 1.2 * h)
+            if angle is None:
+                angle = consensus([it for it in horiz if it[1] >= 0.35 * w], 1.5 * w)
+            if angle is None or abs(angle) < 0.5:
+                return 0.0
+            # getRotationMatrix2D: positive = counter-clockwise, so undo a CCW tilt with a negative angle
+            return round(float(np.clip(-angle, -3.0, 3.0)), 1)
         except Exception:
             pass
         return 0.0
@@ -263,7 +285,9 @@ class IndianWeddingEditingModel(EditingModel):
         preset_name: str = "Natural Wedding",
         scene_group: Optional[str] = None,
         return_mask: bool = False,
-        face_metrics: Optional[FaceMetrics] = None
+        face_metrics: Optional[FaceMetrics] = None,
+        retouch_preset: str = "Natural",
+        calibrate: bool = True
     ):
         """
         Calculates individualized parameters based on image histogram and skin tone constraints.
@@ -323,9 +347,11 @@ class IndianWeddingEditingModel(EditingModel):
         ratio = sub_lum / max(1.0, bg_lum)
         is_dark_bg = (bg_lum < 58.0) or (ratio > 1.35 and sub_lum > 45.0)
 
+        subject_skin_ref = None
         if has_subject_skin or np.sum(skin_meter) > 40:
             target_skin_pixels = gray[skin_in_subject] if has_subject_skin else gray[skin_meter]
             skin_median = float(np.median(target_skin_pixels))
+            subject_skin_ref = skin_median
 
             if is_dark_bg:
                 # Dark background (night, dark hall, stage, black backdrop):
@@ -429,8 +455,10 @@ class IndianWeddingEditingModel(EditingModel):
             auto_temp = 0.0
             auto_tint = 0.0
         else:
-            auto_temp = float(np.clip(-rb_diff * 0.25 + preset.get("temp_bias", 0.0), -28.0, 22.0))
-            auto_tint = float(np.clip(-g_deviation * 0.35, -18.0, 18.0))
+            # Neutral colour balance is handled by AI Auto White Balance (auto_wb below);
+            # temperature / tint here only carry the preset's creative tone.
+            auto_temp = float(np.clip(preset.get("temp_bias", 0.0), -28.0, 22.0))
+            auto_tint = 0.0
 
         # 4. Indian Skin Tone Preservation & Vibrance
         skin_info = self.analyze_indian_skin_chroma(rgb)
@@ -484,7 +512,7 @@ class IndianWeddingEditingModel(EditingModel):
             vibrance = min(18.0, vibrance + 2.0)
         elif genre == "Family & Stage Group":
             # Priority: Deep shadow fill so back-row family members are well-lit
-            shadows = max(shadows, 28.0)
+            shadows = max(shadows, 22.0)
             contrast = max(contrast, 6.0)
             whites = max(whites, 2.0)
             blacks = min(blacks, 4.0)
@@ -498,13 +526,13 @@ class IndianWeddingEditingModel(EditingModel):
                 saturation = max(-8.0, saturation - 3.0)
         elif genre == "Night Reception & Dance":
             # Priority: Lift dark venue shadows, clean high ISO grain, tame DJ color spill on faces
-            shadows = max(shadows, 34.0)
+            shadows = max(shadows, 28.0)
             noise_reduction = min(noise_reduction, 5.0)
             whites = min(whites, 6.0)
         elif genre == "Outdoor Sunlight & Garden":
             # Priority: Harsh sun shadow fill under brows/noses, sky highlight recovery
             highlights = min(highlights, -28.0)
-            shadows = max(shadows, 26.0)
+            shadows = max(shadows, 22.0)
             vibrance = min(18.0, vibrance + 4.0)
         elif genre == "Décor, Rituals & Macro Details":
             # Priority: Intricate jewelry sparkle, flower saturation, rich embroidery contrast
@@ -512,6 +540,14 @@ class IndianWeddingEditingModel(EditingModel):
             contrast = max(contrast, 8.0)
             highlights = min(highlights, -18.0)
             sharpening = max(sharpening, 32.0)
+
+        # 6b. Depth guard: dark hair / suits / backgrounds are not a reason to lift shadows when the faces are
+        #     already well lit; a big lift there only flattens the portrait (milky, low-depth look)
+        if subject_skin_ref is not None and not is_dark_bg:
+            if subject_skin_ref >= 115.0:
+                shadows = float(min(shadows, 14.0))
+            elif subject_skin_ref >= 95.0:
+                shadows = float(min(shadows, 22.0))
 
         # 7. Straightening angle
         straighten = self.detect_straighten_angle(gray)
@@ -530,12 +566,54 @@ class IndianWeddingEditingModel(EditingModel):
         sharpening = float(np.clip(sharpening * 1.05, 22.0, 48.0))
 
 
-        # User Requirement: Subtle SkinFiner-grade skin smoothing, gentle 3D Dodge & Burn
-        auto_skin_smooth = 25.0
+        # Skin smoothing now lives in the AI Skin Retouch block (skin-mask gated, per-face scale);
+        # the engine skips photos without a detected face. Gentle 3D Dodge & Burn stays.
+        auto_skin_smooth = 0.0
         auto_dodge_burn = 20.0
+        auto_skin_glow = 65.0      # owner: "halka sa skin pe glow" - soft radiance on skin only
+        retouch_block = build_retouch_preset(retouch_preset or "Natural")
+
+        # AI Auto White Balance: grey-pixel / grey-edge / white-patch illuminant estimate,
+        # verified against the skin tone of every detected face. Applied in every preset.
+        try:
+            auto_wb = analyze_white_balance(rgb)
+        except Exception:
+            auto_wb = None
+
+        # Subject-first over-light control: the subject (faces / people found by the subject engine) decides.
+        # If the subject's skin is brighter than a natural portrait level, bring the SUBJECT down through
+        # subject_exposure (mask-based, mostly in its highlights). The whole frame only shares part of the
+        # correction when the background is bright as well; a dark background stays as it is.
+        SKIN_TARGET_MAX = 158.0          # gray level of well-exposed (Indian) skin under flash / daylight
+        SUBJECT_TARGET_MAX = 182.0       # subjects without visible skin (bridal outfit, decor close-ups)
+        subject_exposure = 0.0
+        subject_hot = False
+        if subject_skin_ref is not None and subject_skin_ref > SKIN_TARGET_MAX:
+            need_ev = float(np.log2(SKIN_TARGET_MAX / subject_skin_ref))
+            subject_hot = True
+        elif subject_skin_ref is None and subject_info.get("has_subject", False) and sub_p50 > SUBJECT_TARGET_MAX:
+            need_ev = float(np.log2(SUBJECT_TARGET_MAX / sub_p50)) * 0.7
+            subject_hot = True
+        if subject_hot:
+            need_ev = max(need_ev, -0.95)
+            global_share = 0.0 if is_dark_bg else (0.45 if bg_lum >= 140.0 else 0.2)
+            exposure = float(min(exposure, need_ev * global_share)) if global_share > 0 else float(min(exposure, 0.0))
+            # The subject gets whatever the global exposure did not already take off (in subject-weighted EV)
+            subject_exposure = float(np.clip(need_ev - min(0.0, exposure), -0.95, 0.0))
+            highlights = float(min(highlights, -35.0))
+            # Keep the picture crisp after pulling light down: clean whites, a touch more contrast, deeper blacks
+            whites = float(max(whites, 0.0))
+            contrast = float(max(contrast, preset["contrast_bias"] + 8.0))
+            blacks = float(min(blacks, -5.0))
+        else:
+            # Owner's house look: a very gentle overall lift (+0.06 EV). Near-clipped photos get only +0.02
+            # so whites, jewellery and flash highlights never blow out.
+            brightness_lift = 0.02 if (p99 >= 246.0 or sub_p95 > 235.0) else 0.06
+            exposure = float(min(0.45, exposure + brightness_lift))
 
         res_params = EditParameters(
             exposure=round(exposure, 2),
+            subject_exposure=round(subject_exposure, 2),
             temperature=round(auto_temp, 1),
             tint=round(auto_tint, 1),
             contrast=round(contrast, 1),
@@ -551,8 +629,245 @@ class IndianWeddingEditingModel(EditingModel):
             preset_name=preset_name,
             auto_blemish=0.0,
             skin_smoothing=round(auto_skin_smooth, 1),
-            dodge_burn=round(auto_dodge_burn, 1)
+            dodge_burn=round(auto_dodge_burn, 1),
+            skin_glow=round(auto_skin_glow, 1),
+            retouch=retouch_block,
+            auto_wb=auto_wb
         )
+        # Closed-loop finishing: render a preview with these settings and measure it like an editor would
+        # (subject light, haze, contrast, skin colour), then correct the settings. Accuracy over speed.
+        if calibrate:
+            try:
+                self._calibrate_render(rgb, res_params, subject_mask, subject_info, skin_in_subject)
+            except Exception:
+                pass
+            try:
+                self._calibrate_colour(rgb, res_params, subject_mask, subject_info)
+            except Exception:
+                pass
+
         if return_mask:
             return res_params, (subject_mask, subject_info)
         return res_params
+
+    SUBJECT_SKIN_MAX = 160.0   # rendered skin brighter than this reads as "too much light" on the subject
+
+    # Clean professional colour (owner: "yellow halka kam, halka blue tone"): whites / greys finish a touch
+    # cool, skin stays natural - never yellow, never blue.
+    NEUTRAL_B_TARGET = -1.5    # Lab b* of neutral surfaces after the edit (0 = pure grey, <0 = light blue)
+    SKIN_HUE_YELLOW = 50.0     # Lab hue of skin above this reads yellow
+    SKIN_HUE_COOL_FLOOR = 36.0 # never cool skin below this (grey / pink, lifeless)
+
+    def _calibrate_colour(self, rgb, params, subject_mask, subject_info):
+        """Closed-loop colour finish on a 900px render (full pipeline, creative preset tone excluded):
+        adjusts the white-balance temperature until neutral surfaces (white clothes, walls, sky haze,
+        steel, paper) sit at NEUTRAL_B_TARGET and no face reads yellow. Works on the final look, so every
+        warming stage of the pipeline (contrast, vibrance, retouch) is accounted for."""
+        from backend.services.image_service import apply_edit_pipeline   # lazy: avoids import cycle
+        from backend.core.white_balance import _normalize_gains
+
+        h, w = rgb.shape[:2]
+        scale = min(1.0, 900.0 / max(h, w))
+        size = (max(1, int(w * scale)), max(1, int(h * scale)))
+        small = cv2.resize(rgb, size, interpolation=cv2.INTER_AREA) if scale < 1.0 else rgb.copy()
+        mask_small = None
+        if subject_mask is not None:
+            mask_small = (cv2.resize(subject_mask.astype(np.float32), size, interpolation=cv2.INTER_LINEAR)
+                          if scale < 1.0 else subject_mask.astype(np.float32))
+
+        # Faces: inner-cheek skin for the skin check, whole (grown) face boxes kept out of the neutral set
+        face_excl = np.zeros(small.shape[:2], np.uint8)
+        skin_sel = np.zeros(small.shape[:2], bool)
+        try:
+            from backend.retouch.faces import detect_faces
+            for f in detect_faces(small) or []:
+                fx, fy, fw, fh = [int(round(v)) for v in f.box]
+                cv2.rectangle(face_excl, (fx - fw // 3, fy - fh // 3), (fx + fw + fw // 3, fy + fh + fh), 1, -1)
+                skin_sel[max(0, fy + fh // 4):max(0, fy + fh - fh // 4), max(0, fx + fw // 5):max(0, fx + fw - fw // 5)] = True
+        except Exception:
+            pass
+
+        wb = dict(params.auto_wb) if isinstance(params.auto_wb, dict) else {"enabled": True, "notes": []}
+        base = np.array(wb.get("gains") or [1.0, 1.0, 1.0], np.float64)
+        if not wb.get("enabled", True):
+            return
+        k_strength = float(np.clip(float(wb.get("strength", 100.0)), 0.0, 150.0)) / 100.0
+        base = np.exp(np.log(np.clip(base, 0.3, 3.0)) * k_strength)
+
+        proxy = EditParameters.from_dict(params.to_dict())
+        proxy.temperature, proxy.tint = 0.0, 0.0          # judge the neutral look; the preset tone goes on top
+        proxy.skin_glow = 0.0                              # luminance-only, irrelevant for colour
+
+        def gains_for(t):
+            # t > 0 cools (more blue, less red), t < 0 warms
+            return _normalize_gains(base * np.exp(np.array([-t / 2.0, 0.0, t / 2.0])))
+
+        neutral_sel, skin_px = None, None
+        t, slope = 0.0, None
+        last_b, last_t, first_b, hue = None, None, None, None
+        for _ in range(5):
+            proxy.auto_wb = {**wb, "enabled": True, "strength": 100.0, "gains": [float(v) for v in gains_for(t)]}
+            out = apply_edit_pipeline(small.copy(), proxy, cached_subject_mask=mask_small, cached_subject_info=subject_info)
+            lab = cv2.cvtColor(out, cv2.COLOR_RGB2LAB).astype(np.float32)
+            L, a, b = lab[..., 0], lab[..., 1] - 128.0, lab[..., 2] - 128.0
+            if neutral_sel is None:
+                C = np.hypot(a, b)
+                # Skin-coloured pixels (necks, arms, hands, warm wood) are never "neutral" even when the
+                # current white balance has made them pale: judged on the camera's colours
+                ycc = cv2.cvtColor(small, cv2.COLOR_RGB2YCrCb)
+                skin_like = ((ycc[..., 1] >= 133) & (ycc[..., 1] <= 175) & (ycc[..., 2] >= 77)
+                             & (ycc[..., 2] <= 127) & (ycc[..., 0] >= 35))
+                neutral_sel = (C < 12.0) & (L > 60.0) & (L < 248.0) & (face_excl == 0) & ~skin_like
+                if float(neutral_sel.mean()) < 0.015:
+                    neutral_sel = np.zeros_like(neutral_sel)
+                # skin: the warm, chromatic pixels inside the inner face boxes
+                hue_all = np.degrees(np.arctan2(b, a))
+                skin_px = skin_sel & (C > 8.0) & (hue_all > 10.0) & (hue_all < 85.0) & (L > 40.0) & (L < 240.0)
+                if int(skin_px.sum()) < 40:
+                    skin_px = None
+
+            nb = float(np.median(b[neutral_sel])) if neutral_sel.any() else None
+            hue = (float(np.degrees(np.arctan2(np.median(b[skin_px]), np.median(a[skin_px]))))
+                   if skin_px is not None else None)
+            if first_b is None:
+                first_b = nb
+            if nb is not None and last_b is not None and abs(t - last_t) > 1e-4:
+                s = (nb - last_b) / (t - last_t)
+                if -200.0 < s < -10.0:                     # cooling lowers b*: a sane measured slope
+                    slope = s
+            k = slope if slope is not None else -60.0      # b* units per unit of t (measured on wedding files)
+
+            want = 0.0
+            if nb is not None:
+                want = (nb - self.NEUTRAL_B_TARGET) / -k
+            if hue is not None:
+                if hue > self.SKIN_HUE_YELLOW:
+                    want = max(want, (hue - self.SKIN_HUE_YELLOW + 1.0) * 0.006)
+                elif hue < self.SKIN_HUE_COOL_FLOOR and want > 0:
+                    want = 0.0
+                elif want > 0 and hue - want * 40.0 < self.SKIN_HUE_COOL_FLOOR:
+                    want = max(0.0, (hue - self.SKIN_HUE_COOL_FLOOR) / 40.0)
+            if abs(want) < 0.004:
+                break
+            last_b, last_t = nb, t
+            t = float(np.clip(t + want, -0.08, 0.25))
+            if t == last_t:
+                break
+
+        if abs(t) < 0.003:
+            return
+        g = gains_for(t)
+        notes = [n for n in (wb.get("notes") or []) if not str(n).startswith("clean colour")]
+        msg = "clean colour: %s %.2f" % ("cooled" if t > 0 else "warmed", abs(t))
+        if first_b is not None:
+            msg += " (whites b* %.1f -> %.1f)" % (first_b, nb if nb is not None else first_b)
+        if hue is not None:
+            msg += ", skin hue %.0f" % hue
+        params.auto_wb = {**wb, "enabled": True, "strength": 100.0,
+                          "gains": [round(float(v), 4) for v in g], "notes": notes + [msg]}
+
+    def _calibrate_render(self, rgb, params, subject_mask, subject_info, skin_in_subject):
+        """Renders the edit on a 1200px preview (same pipeline as export, retouch included) and corrects:
+        1. Subject Light  - subject skin must not come out brighter than SUBJECT_SKIN_MAX
+        2. Haze           - edits must not wash out the blacks (flat / milky look)
+        3. Contrast       - the subject keeps at least the depth it had in the original
+        4. Skin colour    - skin must not turn grey / pale compared to the original
+        """
+        if subject_mask is None:
+            return
+        from backend.services.image_service import apply_edit_pipeline   # lazy: avoids import cycle
+
+        h, w = rgb.shape[:2]
+        scale = min(1.0, 1200.0 / max(h, w))
+        size = (max(1, int(w * scale)), max(1, int(h * scale)))
+        small = cv2.resize(rgb, size, interpolation=cv2.INTER_AREA) if scale < 1.0 else rgb.copy()
+        mask_small = (cv2.resize(subject_mask.astype(np.float32), size, interpolation=cv2.INTER_LINEAR)
+                      if scale < 1.0 else subject_mask.astype(np.float32))
+        skin_small = None
+        if skin_in_subject is not None and int(np.sum(skin_in_subject)) >= 60:
+            skin_small = cv2.resize(skin_in_subject.astype(np.uint8), size, interpolation=cv2.INTER_NEAREST) > 0
+            if int(np.sum(skin_small)) < 30:
+                skin_small = None
+
+        # Every detected face is judged on its own (a dark groom must not hide an over-lit bride)
+        face_sels = []
+        try:
+            from backend.retouch.faces import detect_faces
+            ycc = cv2.cvtColor(small, cv2.COLOR_RGB2YCrCb)
+            skin_any = ((ycc[..., 1] >= 128) & (ycc[..., 1] <= 180) & (ycc[..., 2] >= 75)
+                        & (ycc[..., 2] <= 135) & (ycc[..., 0] >= 32))
+            for f in detect_faces(small) or []:
+                fx, fy, fw, fh = [int(round(v)) for v in f.box]
+                # inner face (cheeks / forehead), away from hair and background
+                x0, x1 = max(0, fx + fw // 6), min(size[0], fx + fw - fw // 6)
+                y0, y1 = max(0, fy + fh // 6), min(size[1], fy + fh - fh // 5)
+                sel = np.zeros(skin_any.shape, dtype=bool)
+                sel[y0:y1, x0:x1] = skin_any[y0:y1, x0:x1]
+                if int(np.sum(sel)) >= 25:
+                    face_sels.append(sel)
+        except Exception:
+            face_sels = []
+        if not face_sels and skin_small is not None:
+            face_sels = [skin_small]
+
+        def chroma(img_u8, sel):
+            lab = cv2.cvtColor(img_u8, cv2.COLOR_RGB2LAB).astype(np.float32)
+            a = lab[:, :, 1][sel] - 128.0
+            b = lab[:, :, 2][sel] - 128.0
+            return float(np.median(np.sqrt(a * a + b * b)))
+
+        y_in = cv2.cvtColor(small, cv2.COLOR_RGB2GRAY).astype(np.float32)
+        sub_sel = mask_small > 0.3
+        if int(np.sum(sub_sel)) < 500:
+            sub_sel = np.ones_like(sub_sel, dtype=bool)
+        in_p1 = float(np.percentile(y_in, 1))
+        in_std = float(np.std(y_in[sub_sel]))
+        in_face_c = [chroma(small, sel) for sel in face_sels]
+        target_p1 = float(np.clip(in_p1, 6.0, 14.0))
+
+        proxy = EditParameters.from_dict(params.to_dict())
+        proxy.skin_glow = 0.0     # light is judged without the skin glow; the glow goes on top unchanged
+        prev_face, prev_subj, subject_light_ok = None, proxy.subject_exposure, True
+        for _ in range(4):
+            out = apply_edit_pipeline(small.copy(), proxy, cached_subject_mask=mask_small, cached_subject_info=subject_info)
+            y = cv2.cvtColor(out, cv2.COLOR_RGB2GRAY).astype(np.float32)
+            adjusted = False
+
+            # 1. Subject light: the brightest face decides (darker faces are barely touched: the correction
+            #    works mostly on bright tones)
+            if face_sels and subject_light_ok:
+                face = max(float(np.median(y[sel])) for sel in face_sels)
+                if prev_face is not None and face > prev_face - 2.0:
+                    # That face is outside the subject mask: Subject Light cannot reach it, undo the last step
+                    proxy.subject_exposure = prev_subj
+                    subject_light_ok = False
+                elif face > self.SUBJECT_SKIN_MAX + 2.0:
+                    prev_face, prev_subj = face, proxy.subject_exposure
+                    step = float(np.log2(self.SUBJECT_SKIN_MAX / face)) * 1.15
+                    proxy.subject_exposure = float(np.clip(proxy.subject_exposure + step, -1.2, 0.0))
+                    proxy.highlights = float(min(proxy.highlights, -30.0))
+                    adjusted = True
+
+            # 2. Haze: blacks lifted above the original's black point
+            p1 = float(np.percentile(y, 1))
+            if p1 > target_p1 + 4.0 and proxy.blacks > -45.0:
+                proxy.blacks = float(max(-45.0, proxy.blacks - float(np.clip((p1 - target_p1) * 2.5, 3.0, 15.0))))
+                adjusted = True
+
+            # 3. Contrast / depth on the subject
+            out_std = float(np.std(y[sub_sel]))
+            if in_std > 8.0 and out_std < in_std * 0.95 and proxy.contrast < 30.0:
+                proxy.contrast = float(min(30.0, proxy.contrast + float(np.clip((in_std / max(out_std, 1.0) - 1.0) * 100.0, 2.0, 10.0))))
+                adjusted = True
+
+            # 4. Skin colour must not go grey / pale on ANY face
+            ratios = [chroma(out, sel) / max(c_in, 1.0) for sel, c_in in zip(face_sels, in_face_c) if c_in > 4.0]
+            if ratios and min(ratios) < 0.94 and proxy.saturation < 14.0:
+                proxy.saturation = float(min(14.0, proxy.saturation + float(np.clip((0.98 / max(min(ratios), 0.05) - 1.0) * 120.0, 2.0, 8.0))))
+                adjusted = True
+
+            if not adjusted:
+                break
+
+        for key in ("subject_exposure", "highlights", "blacks", "contrast", "saturation"):
+            setattr(params, key, round(float(getattr(proxy, key)), 2))

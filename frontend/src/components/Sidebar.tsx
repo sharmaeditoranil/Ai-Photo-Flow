@@ -28,7 +28,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
     { id: 'ALL', label: 'All Photos', icon: Images, count: counts?.total ?? 0, color: '#94a3b8' },
     { id: 'BEST', label: 'AI Best', icon: Star, count: counts?.best_count ?? 0, color: '#eab308' },
     { id: 'CLIENT_SELECTED', label: 'Customer Selected', icon: Heart, count: counts?.client_selected_count ?? 0, color: '#f43f5e' },
-    { id: 'SELECTED', label: 'Selected', icon: CheckCircle, count: counts?.selected_count ?? 0, color: '#10b981' },
     { id: 'REVIEW', label: 'Review', icon: AlertTriangle, count: counts?.review_count ?? 0, color: '#f59e0b' },
     { id: 'REJECT', label: 'Rejected', icon: XCircle, count: counts?.reject_count ?? 0, color: '#ef4444' },
     { id: 'SIMILAR', label: 'Similar Groups', icon: Copy, count: (counts?.similar_groups_count && counts.similar_groups_count > 0) ? `${counts.similar_groups_count} sets` : (counts?.similar_count ?? 0), color: '#8b5cf6' },

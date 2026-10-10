@@ -67,6 +67,12 @@ class SceneConsistencyEngine:
             temps = [it.get("edit_params", {}).get("temperature", 0.0) for it in items if "edit_params" in it]
             tints = [it.get("edit_params", {}).get("tint", 0.0) for it in items if "edit_params" in it]
 
+            wb_logs = [np.log(np.clip(np.array(it["edit_params"]["auto_wb"]["gains"], dtype=np.float64), 0.3, 3.0))
+                       for it in items
+                       if isinstance(it.get("edit_params", {}).get("auto_wb"), dict)
+                       and isinstance(it["edit_params"]["auto_wb"].get("gains"), list)]
+            med_wb = np.median(np.stack(wb_logs), axis=0) if len(wb_logs) >= 2 else None
+
             med_temp = float(np.median(temps)) if temps else 0.0
             med_tint = float(np.median(tints)) if tints else 0.0
 
@@ -78,6 +84,12 @@ class SceneConsistencyEngine:
                     curr_tint = params.get("tint", 0.0)
                     params["temperature"] = round(curr_temp * 0.65 + med_temp * 0.35, 1)
                     params["tint"] = round(curr_tint * 0.65 + med_tint * 0.35, 1)
+                    # Same light, same white balance: pull AI WB gains 35% toward the scene median
+                    wb = params.get("auto_wb")
+                    if isinstance(wb, dict) and med_wb is not None and isinstance(wb.get("gains"), list):
+                        lg = np.log(np.clip(np.array(wb["gains"], dtype=np.float64), 0.3, 3.0))
+                        blended = np.exp(lg * 0.65 + med_wb * 0.35)
+                        wb["gains"] = [round(float(g), 4) for g in blended]
                 harmonized_photos.append(it)
 
         return harmonized_photos

@@ -168,8 +168,8 @@ class BatchManager:
 
         def runner():
             # Anti-tamper & Crack Protection Check
-            from backend.services.license_service import LicenseService
-            allowed, sec_msg = LicenseService().verify_operational_permission("CULL")
+            from backend.services.license_service import get_license_service
+            allowed, sec_msg = get_license_service().verify_operational_permission("CULL")
             if not allowed:
                 self.add_log(job_id, f"Security Lockdown: {sec_msg}", "ERROR")
                 conn_err = get_connection()
@@ -219,7 +219,7 @@ class BatchManager:
         return job_id
 
     # 2. Background Auto-Edit Job
-    def start_auto_edit_job(self, project_id: int, preset_name: str = "Natural Wedding", photo_ids: Optional[List[int]] = None) -> str:
+    def start_auto_edit_job(self, project_id: int, preset_name: str = "Natural Wedding", photo_ids: Optional[List[int]] = None, retouch_preset: str = "Natural") -> str:
         conn = get_connection()
         cursor = conn.cursor()
 
@@ -244,7 +244,7 @@ class BatchManager:
 
         def runner():
             try:
-                self.add_log(job_id, f"Auto-Editing {total} photos with '{preset_name}' (Multi-Core Accelerated)...")
+                self.add_log(job_id, f"Auto-Editing {total} photos with '{preset_name}' + AI Skin Retouch '{retouch_preset}' (Multi-Core Accelerated)...")
                 import cv2
                 cv2.setNumThreads(1)
                 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -265,7 +265,8 @@ class BatchManager:
                         # Single-pass decode: load image once at 1000px
                         cv_img = load_image(filepath, max_dim=1000)
                         params, (s_mask, s_info) = self.editing_model.calculate_corrections(
-                            cv_img, preset_name=preset_name, scene_group=scene, return_mask=True
+                            cv_img, preset_name=preset_name, scene_group=scene, return_mask=True,
+                            retouch_preset=retouch_preset
                         )
 
                         # Preserve existing manual heal spots if present
@@ -350,9 +351,8 @@ class BatchManager:
 
                     conn_worker.commit()
 
-                    # Harmonize Scene Consistency (skipped in Pure Light mode for speed and 0% color modification)
-                    is_pure_light = "Pure Light" in preset_name
-                    if not is_pure_light and len(edited_records) > 0 and not self.cancel_flags.get(job_id, threading.Event()).is_set():
+                    # Harmonize Scene Consistency (WB gains + creative temperature/tint; Pure Light keeps temp/tint at 0)
+                    if len(edited_records) > 0 and not self.cancel_flags.get(job_id, threading.Event()).is_set():
                         self.add_log(job_id, "Checking scene color consistency...")
                         try:
                             harmonized = SceneConsistencyEngine.harmonize_scene_parameters(edited_records)
@@ -454,8 +454,8 @@ class BatchManager:
 
         def runner():
             # Anti-tamper & Crack Protection Check
-            from backend.services.license_service import LicenseService
-            allowed, sec_msg = LicenseService().verify_operational_permission("EXPORT")
+            from backend.services.license_service import get_license_service
+            allowed, sec_msg = get_license_service().verify_operational_permission("EXPORT")
             if not allowed:
                 self.add_log(job_id, f"Security Lockdown: {sec_msg}", "ERROR")
                 conn_err = get_connection()

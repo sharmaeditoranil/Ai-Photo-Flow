@@ -183,7 +183,8 @@ export const ExportModal: React.FC<ExportModalProps> = ({
 
     const categories: string[] = [];
     if (includeBest) categories.push('BEST');
-    if (includeSelected) categories.push('SELECTED');
+    // Older projects may still hold "SELECTED" photos; they belong to AI Best now
+    if (includeBest || includeSelected) categories.push('SELECTED');
     if (includeClientSelected) categories.push('CLIENT_SELECTED');
     if (includeSimilar) categories.push('SIMILAR');
     if (includeRejected) categories.push('REJECT');
@@ -428,15 +429,6 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                     onChange={(e) => setIncludeBest(e.target.checked)}
                   />
                   <span>⭐ AI Best Photos</span>
-                </label>
-
-                <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#f8fafc' }}>
-                  <input
-                    type="checkbox"
-                    checked={includeSelected}
-                    onChange={(e) => setIncludeSelected(e.target.checked)}
-                  />
-                  <span>✓ Picked Photos</span>
                 </label>
 
                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#f43f5e', fontWeight: 600 }}>

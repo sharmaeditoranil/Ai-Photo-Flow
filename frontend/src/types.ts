@@ -9,8 +9,57 @@ export interface HealSpot {
   radius: number; // 0.005 - 0.05 (relative to min dimension)
 }
 
+// AI Skin Retouch block (mirrors backend/retouch/params.py)
+export interface RetouchParams {
+  enabled: boolean;
+  preset: string;
+  heal: { enabled: boolean; opacity: number; strength: number; faceSizePreset: 'AUTO' | 'SMALL' | 'MEDIUM' | 'LARGE' };
+  mattifier: { enabled: boolean; opacity: number; strength: number; keepSheen: number; texturePreserve: number };
+  skinMask: {
+    auto: boolean; excludeFeatures: boolean; restrictToBody: boolean;
+    tolerance: number; feather: number; opacity: number;
+    colorSamples: { set: number[][]; expand: number[][]; exclude: number[][] };
+  };
+  skinDetails: {
+    enabled: boolean; autoPortraitSize: boolean; portraitSize: number;
+    amount: number; fine: number; medium: number; coarse: number; balance: number;
+  };
+  imperfections: {
+    enabled: boolean; evenTone: number; redness: number; redBrightness: number;
+    yellow: number; yellowBrightness: number; balance: number; eyeBags: number;
+  };
+  skinTone: {
+    enabled: boolean; useSkinMask: boolean; hue: number; saturation: number;
+    brightness: number; contrast: number; shadows: number; highlights: number;
+  };
+}
+
+export interface RetouchPreset {
+  name: string;
+  description: string;
+  params: RetouchParams;
+}
+
+// AI Auto White Balance block (mirrors backend/core/white_balance.py)
+export interface AutoWhiteBalance {
+  enabled: boolean;
+  strength: number;           // 0..150 % of the detected correction
+  gains: number[];            // linear RGB gains
+  cast: string;               // e.g. "warm (yellow/orange) cast"
+  confidence: number;         // 0..1
+  kelvin: number | null;      // estimated light colour temperature
+  grey_pixels?: number;
+  faces?: number;
+  skin_hue_before?: number | null;
+  skin_hue_after?: number | null;
+  notes?: string[];
+}
+
+export type RetouchMaskKind = 'off' | 'skin' | 'heal' | 'shine';
+
 export interface EditParameters {
   exposure: number;
+  subject_exposure?: number;
   temperature: number;
   tint: number;
   contrast: number;
@@ -29,7 +78,10 @@ export interface EditParameters {
   heal_face_preset?: 'AUTO' | 'SMALL' | 'MEDIUM' | 'LARGE';
   skin_smoothing?: number;
   dodge_burn?: number;
+  skin_glow?: number;
   heal_spots?: HealSpot[];
+  retouch?: RetouchParams | null;
+  auto_wb?: AutoWhiteBalance | null;
 }
 
 export interface Photo {
@@ -86,6 +138,19 @@ export interface ClientGallery {
   created_at: string;
   updated_at: string;
   submitted_at?: string;
+  // Master Hosting (photographer's own cPanel domain) upload state
+  hosting_url?: string;
+  hosting_status?: '' | 'PENDING' | 'UPLOADING' | 'ONLINE' | 'FAILED' | 'EXPIRED';
+  hosting_error?: string;
+  hosting_uploaded?: number;
+}
+
+export interface MasterHostingInfo {
+  configured: boolean;
+  is_master: boolean;
+  url: string;
+  error: string | null;
+  version?: string;
 }
 
 export interface ProjectCounts {
@@ -145,8 +210,14 @@ export interface AppSettings {
 
 export interface LicenseStatus {
   plan: 'FREE_TRIAL' | 'PRO' | 'STUDIO' | 'VIP_LIFETIME';
-  status: 'ACTIVE' | 'EXPIRED';
+  status: 'ACTIVE' | 'EXPIRED' | 'OFFLINE' | 'TAMPER_DETECTED';
   is_active: boolean;
+  message?: string | null;
+  hours_left?: number | null;
+  machine_id?: string;
+  activated_at?: number | null;
+  offline_days_left?: number;
+  user_phone?: string;
   is_vip: boolean;
   days_left: number;
   expires_at: string | null;

@@ -38,7 +38,7 @@ pip install -r requirements.txt
 pip install pyinstaller
 
 echo [Step 3/5] Compiling Python AI Backend (photoflow-backend.exe)...
-pyinstaller --noconfirm --onedir --name photoflow-backend --distpath dist-backend --clean backend_entry.py
+pyinstaller --noconfirm --onedir --name photoflow-backend --distpath dist-backend --clean --add-data "backend\templates;backend\templates" --add-data "backend\data;backend\data" --add-data "backend\models;backend\models" backend_entry.py
 
 if not exist "dist-backend\photoflow-backend\photoflow-backend.exe" (
     echo [ERROR] Failed to compile dist-backend\photoflow-backend\photoflow-backend.exe!

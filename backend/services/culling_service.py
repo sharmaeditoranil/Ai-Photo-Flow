@@ -30,6 +30,7 @@ SUPPORTED_EXTENSIONS = {
     '.raw', '.rw2',
     '.orf', '.ori',
     '.pef', '.ptx',
+    '.srw', '.rwl', '.3fr', '.fff', '.iiq', '.erf', '.kdc', '.dcr', '.mef', '.mos', '.x3f',
     '.tif', '.tiff',
     '.webp'
 }
@@ -141,8 +142,8 @@ class CullingService:
                 if not p_exist:
                     cursor.execute("""
                     INSERT INTO photos (
-                        project_id, filename, file_path, file_size, width, height, file_format, exif_date
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        project_id, filename, file_path, file_size, width, height, file_format, exif_date, ai_recommendation
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'BEST')
                     """, (
                         project_id, filename, fpath, file_size,
                         meta.get("width", 0), meta.get("height", 0), file_format, meta.get("exif_date", "")
@@ -223,6 +224,17 @@ class CullingService:
                 # 4. Face & Eyes
                 face = self.face_model.detect(cv_img)
 
+                # 4b. Focus check at (near) 100% view on the important faces: mild miss-focus that is
+                #     invisible at 1000 px shows up here (RAW: fast 3000 px half-size development)
+                if face.faces_count > 0:
+                    try:
+                        from backend.core.face_model import hires_face_sharpness
+                        full_img = load_image(filepath, max_dim=3000) if is_raw_format(filepath) else load_image(filepath)
+                        face.face_sharpness_hires = hires_face_sharpness(full_img, face.bounding_boxes, cv_img.shape[:2])
+                        del full_img
+                    except Exception:
+                        pass
+
                 # 5. Duplicate fingerprint (dHash)
                 fp = self.duplicate_model.compute_fingerprint(cv_img)
 
@@ -233,7 +245,8 @@ class CullingService:
                 scene = SceneConsistencyEngine.classify_scene(quality.mean_luminance, r_m, g_m, b_m, idx, total)
 
                 # 7. Initial AI Edit parameters
-                edit_params = self.editing_model.calculate_corrections(cv_img, preset_name="Natural Wedding", scene_group=scene)
+                # Preliminary look only (Auto Edit re-computes with the full closed-loop calibration)
+                edit_params = self.editing_model.calculate_corrections(cv_img, preset_name="Natural Wedding", scene_group=scene, calibrate=False)
 
                 processed_items.append({
                     "id": photo_id,
@@ -247,9 +260,11 @@ class CullingService:
                     "feature": fp.get("feature", []),
                     "scene": scene,
                     "edit_params": edit_params.to_dict(),
-                    "sharpness": quality.sharpness,
+                    # Burst ranking judges focus on the main face when there is one
+                    "sharpness": ((face.face_sharpness + face.face_sharpness_hires) / 2.0 if face.face_sharpness_hires >= 0 else face.face_sharpness)
+                                 if face.faces_count > 0 else max(quality.sharpness, quality.focus_sharpness),
                     "quality_score": quality.overall_quality,
-                    "blur_detected": quality.blur_detected,
+                    "blur_detected": (face.face_sharpness < 38.0) if face.faces_count > 0 else (max(quality.sharpness, quality.focus_sharpness) < 34.0),
                     "eyes_status": face.eyes_status
                 })
 
@@ -312,7 +327,12 @@ class CullingService:
                 ai_confidence = ?,
                 scene_category = ?,
                 edit_params = ?,
-                dhash = ?
+                dhash = ?,
+                face_sharpness = ?,
+                face_close_up = ?,
+                face_emotion = ?,
+                face_brightness = ?,
+                face_focus = ?
             WHERE id = ?
             """, (
                 item["thumbnail_path"],
@@ -329,6 +349,11 @@ class CullingService:
                 item["scene"],
                 json.dumps(item["edit_params"]),
                 item["dhash"],
+                float(f.face_sharpness) if f.faces_count > 0 else None,
+                1 if getattr(f, "is_close_up", False) else 0,
+                1 if getattr(f, "has_emotion", False) else 0,
+                float(getattr(f, "face_brightness", -1.0)) if f.faces_count > 0 else None,
+                float(getattr(f, "face_sharpness_hires", -1.0)) if f.faces_count > 0 else None,
                 pid
             ))
 
@@ -385,9 +410,14 @@ class CullingService:
             f = FaceMetrics(
                 faces_count=p.get("faces_count", 0),
                 eyes_status=p.get("eyes_status", "NO_FACE"),
-                face_sharpness=p.get("sharpness_score", 0.0),
+                face_sharpness=p.get("face_sharpness") if p.get("face_sharpness") is not None else p.get("sharpness_score", 0.0),
                 bounding_boxes=[],
-                eyes_open_confidence=1.0
+                eyes_open_confidence=1.0,
+                is_close_up=bool(p.get("face_close_up") or 0),
+                has_emotion=bool(p.get("face_emotion") or 0),
+                face_brightness=float(p["face_brightness"]) if p.get("face_brightness") is not None else -1.0,
+                # face_focus = display-size face focus; the old pixel-level score (face_sharpness_hires) is ignored
+                face_sharpness_hires=float(p["face_focus"]) if p.get("face_focus") is not None else -1.0
             )
 
             items.append({
@@ -399,7 +429,9 @@ class CullingService:
                 "dhash": fp["dhash"],
                 "color_hist": fp["color_hist"],
                 "feature": fp["feature"],
-                "sharpness": q.sharpness,
+                # Same burst ranking as a full cull: focus of the main face when there is one
+                "sharpness": ((f.face_sharpness + f.face_sharpness_hires) / 2.0 if f.face_sharpness_hires >= 0 else f.face_sharpness)
+                             if f.faces_count > 0 else q.sharpness,
                 "quality_score": q.overall_quality,
                 "blur_detected": q.blur_detected,
                 "eyes_status": f.eyes_status

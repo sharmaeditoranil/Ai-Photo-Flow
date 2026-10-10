@@ -619,20 +619,6 @@ export const PhotoGrid: React.FC<PhotoGridProps> = ({
                       <Star size={11} fill={(photo.user_selection === 'BEST' || (photo.user_selection === 'UNRATED' && photo.ai_recommendation === 'BEST')) ? '#fff' : 'none'} />
                     </button>
                     <button
-                      onClick={() => onUpdatePhotoSelection(photo.id, 'SELECTED')}
-                      style={{
-                        background: (photo.user_selection === 'SELECTED' || (photo.user_selection === 'UNRATED' && photo.ai_recommendation === 'SELECTED')) ? '#10b981' : 'rgba(30, 41, 59, 0.8)',
-                        color: (photo.user_selection === 'SELECTED' || (photo.user_selection === 'UNRATED' && photo.ai_recommendation === 'SELECTED')) ? '#fff' : '#cbd5e1',
-                        border: 'none',
-                        borderRadius: '3px',
-                        padding: '3px 5px',
-                        cursor: 'pointer'
-                      }}
-                      title="Pick / Select photo (P)"
-                    >
-                      <Check size={11} />
-                    </button>
-                    <button
                       onClick={() => onUpdatePhotoSelection(photo.id, 'REJECT')}
                       style={{
                         background: (photo.user_selection === 'REJECT' || (photo.user_selection === 'UNRATED' && photo.ai_recommendation === 'REJECT')) ? '#ef4444' : 'rgba(30, 41, 59, 0.8)',

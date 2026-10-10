@@ -5,7 +5,7 @@ import {
   FolderOpen, HardDrive, Sparkles, Settings
 } from 'lucide-react';
 import { api, BACKEND_ORIGIN, BACKEND_PORT } from '../api';
-import { Project, Photo, ClientGallery, BatchJob } from '../types';
+import { Project, Photo, ClientGallery, BatchJob, MasterHostingInfo } from '../types';
 
 interface ShareProofingModalProps {
   isOpen: boolean;
@@ -51,6 +51,8 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
   const [isSavingDomain, setIsSavingDomain] = useState<boolean>(false);
   const [domainSaveMessage, setDomainSaveMessage] = useState<string | null>(null);
   const [showAdminDomainSetup, setShowAdminDomainSetup] = useState<boolean>(false);
+  const [masterInfo, setMasterInfo] = useState<MasterHostingInfo | null>(null);
+  const [isResyncing, setIsResyncing] = useState<boolean>(false);
 
   const [standaloneExportFolder, setStandaloneExportFolder] = useState<string>('/Users/anilsharma/Desktop/Client_Proofing_Web');
   const [isExportingStandalone, setIsExportingStandalone] = useState<boolean>(false);
@@ -70,6 +72,8 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
     try {
       const info = await api.getNetworkInfo();
       if (info.local_ip) setLocalIp(info.local_ip);
+      const master: MasterHostingInfo | undefined = (info as any).master_hosting;
+      if (master) setMasterInfo(master);
       if ((info as any).custom_domain_url) {
         setCustomDomainUrl((info as any).custom_domain_url);
         if ((info as any).custom_domain_url.trim()) {
@@ -114,9 +118,23 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
         custom_domain_url: customDomainUrl.trim(),
         cloudflare_tunnel_token: cfToken.trim()
       });
-      setDomainSaveMessage('✅ Custom Domain saved! Links updated.');
-      await handleStartTunnel();
-      setTimeout(() => setDomainSaveMessage(null), 4000);
+      if (!customDomainUrl.trim()) {
+        setMasterInfo(null);
+        setDomainSaveMessage('✅ Domain removed. Links will use the online tunnel.');
+        await handleStartTunnel();
+        return;
+      }
+      const chk = await api.checkMasterHosting();
+      setMasterInfo(chk);
+      setCustomDomainUrl(chk.url || customDomainUrl.trim());
+      if (chk.is_master) {
+        setDomainSaveMessage('✅ Master Hosting connected! Naye client links ab aapke domain par banenge.');
+      } else if (cfToken.trim()) {
+        setDomainSaveMessage('✅ Custom domain saved (Cloudflare tunnel).');
+        await handleStartTunnel();
+      } else {
+        setDomainSaveMessage(`❌ Domain saved, lekin Master Hosting nahi mila: ${chk.error || 'index.php not found'}`);
+      }
     } catch (err: any) {
       setDomainSaveMessage(`❌ Error: ${err.message}`);
     } finally {
@@ -164,14 +182,28 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
     return () => clearInterval(interval);
   }, [activeJob]);
 
+  const hostingBusy = !!activeGallery && (activeGallery.hosting_status === 'PENDING' || activeGallery.hosting_status === 'UPLOADING');
+
+  useEffect(() => {
+    if (!isOpen || !hostingBusy) return;
+    const interval = setInterval(() => { loadExistingGalleries(); }, 2000);
+    return () => clearInterval(interval);
+  }, [isOpen, hostingBusy, activeGallery?.gallery_uuid]);
+
+  useEffect(() => {
+    if (activeJob && activeJob.status === 'COMPLETED') loadExistingGalleries();
+  }, [activeJob?.status]);
+
   const loadExistingGalleries = async () => {
     if (!project) return;
     try {
       const list = await api.listProofingGalleries(project.id);
       setExistingGalleries(list);
-      if (list.length > 0 && !activeGallery) {
-        setActiveGallery(list[0]);
-      }
+      setActiveGallery((prev: any) => {
+        if (!prev) return list.length > 0 ? list[0] : prev;
+        const fresh = list.find((g: any) => g.gallery_uuid === prev.gallery_uuid);
+        return fresh ? { ...prev, ...fresh } : prev;
+      });
     } catch (e) {
       console.error('Error fetching galleries:', e);
     }
@@ -246,11 +278,22 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
     return BACKEND_ORIGIN;
   };
 
+  // Galleries uploaded to the Master Hosting (cPanel index.php) use  <domain>/?id=<uuid>
+  const getMasterShareUrl = (gallery: any, withPin: boolean = autoUnlockLink) => {
+    const base = String(gallery.hosting_url).replace(/\/+$/, '');
+    let url = `${base}/?id=${encodeURIComponent(gallery.gallery_uuid)}`;
+    if (withPin && gallery.client_pin) url += `&pin=${encodeURIComponent(gallery.client_pin)}`;
+    return url;
+  };
+
   const getFullShareUrl = (
     galleryUuid: string,
     mode: 'online' | 'domain' | 'wifi' | 'local' = linkMode,
     withPin: boolean = autoUnlockLink
   ) => {
+    if (mode !== 'local' && activeGallery?.gallery_uuid === galleryUuid && activeGallery?.hosting_url) {
+      return getMasterShareUrl(activeGallery, withPin);
+    }
     const origin = getBaseOrigin(mode);
     const pin = activeGallery?.client_pin;
     if (withPin && pin) {
@@ -267,8 +310,12 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
 
   const handleShareWhatsApp = () => {
     if (!activeGallery) return;
-    // Prefer online link for WhatsApp so client can open on mobile phone anywhere
-    const effectiveMode = tunnelUrl ? 'online' : (localIp !== '127.0.0.1' ? 'wifi' : 'local');
+    // Same link that is shown in the box: Master Hosting domain > custom domain > online tunnel > Wi-Fi
+    const effectiveMode = activeGallery.hosting_url
+      ? 'domain'
+      : (linkMode === 'domain' && customDomainUrl.trim())
+        ? 'domain'
+        : tunnelUrl ? 'online' : (localIp !== '127.0.0.1' ? 'wifi' : 'local');
     const shareUrl = getFullShareUrl(activeGallery.gallery_uuid, effectiveMode, autoUnlockLink);
 
     const pinInfo = (activeGallery?.client_pin && !autoUnlockLink)
@@ -279,6 +326,22 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
     );
     window.open(`https://api.whatsapp.com/send?text=${message}`, '_blank');
   };
+
+  const handleResyncToHosting = async () => {
+    if (!activeGallery) return;
+    setIsResyncing(true);
+    try {
+      const res = await api.resyncGalleryToHosting(activeGallery.gallery_uuid);
+      setActiveGallery((prev: any) => prev ? { ...prev, hosting_url: res.hosting_url, hosting_status: 'UPLOADING', hosting_error: '', hosting_uploaded: 0 } : prev);
+    } catch (err: any) {
+      setActiveGallery((prev: any) => prev ? { ...prev, hosting_status: 'FAILED', hosting_error: err.message } : prev);
+    } finally {
+      setIsResyncing(false);
+    }
+  };
+
+  const hostingOnline = !activeGallery?.hosting_url || activeGallery?.hosting_status === 'ONLINE';
+  const masterReady = !!masterInfo?.is_master;
 
   return (
     <div className="modal-overlay">
@@ -439,6 +502,54 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
                 </div>
               )}
 
+              {/* Master Hosting upload status */}
+              {activeGallery.hosting_url && (
+                <div style={{
+                  background: activeGallery.hosting_status === 'EXPIRED' ? 'rgba(148, 163, 184, 0.08)' : activeGallery.hosting_status === 'FAILED' ? 'rgba(239, 68, 68, 0.1)' : activeGallery.hosting_status === 'ONLINE' ? 'rgba(16, 185, 129, 0.08)' : 'rgba(56, 189, 248, 0.08)',
+                  border: `1px solid ${activeGallery.hosting_status === 'FAILED' ? 'rgba(239, 68, 68, 0.35)' : activeGallery.hosting_status === 'ONLINE' ? 'rgba(16, 185, 129, 0.3)' : 'rgba(56, 189, 248, 0.3)'}`,
+                  borderRadius: '8px', padding: '8px 12px', marginBottom: '10px', fontSize: '11.5px'
+                }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' }}>
+                    <span style={{ display: 'flex', alignItems: 'center', gap: '6px', color: activeGallery.hosting_status === 'FAILED' ? '#f87171' : activeGallery.hosting_status === 'ONLINE' ? '#34d399' : '#38bdf8', fontWeight: 700 }}>
+                      <Globe size={13} />
+                      {activeGallery.hosting_status === 'ONLINE' && 'Aapke domain par live hai ✓'}
+                      {(activeGallery.hosting_status === 'PENDING' || activeGallery.hosting_status === 'UPLOADING') &&
+                        `Domain par upload ho raha hai... ${activeGallery.hosting_uploaded || 0} / ${activeGallery.total_photos}`}
+                      {activeGallery.hosting_status === 'FAILED' && 'Domain upload fail hua'}
+                      {activeGallery.hosting_status === 'EXPIRED' && <span style={{ color: '#cbd5e1' }}>🧹 Photos domain se auto-delete ho gayi (submit ke 7 din baad)</span>}
+                    </span>
+                    {(activeGallery.hosting_status === 'FAILED' || activeGallery.hosting_status === 'EXPIRED') && (
+                      <button type="button" onClick={handleResyncToHosting} disabled={isResyncing} className="btn btn-secondary"
+                        style={{ padding: '3px 10px', fontSize: '11px', display: 'flex', alignItems: 'center', gap: '4px' }}>
+                        <RefreshCw size={11} /> {activeGallery.hosting_status === 'EXPIRED' ? 'Dobara upload karein' : 'Retry Upload'}
+                      </button>
+                    )}
+                  </div>
+                  {activeGallery.hosting_status === 'FAILED' && activeGallery.hosting_error && (
+                    <div style={{ color: '#fca5a5', marginTop: '5px', lineHeight: 1.4, wordBreak: 'break-word' }}>{activeGallery.hosting_error}</div>
+                  )}
+                  {activeGallery.hosting_status === 'EXPIRED' && (
+                    <div style={{ color: '#94a3b8', marginTop: '4px' }}>Client ki selection app me safe hai. Link dobara chahiye to "Dobara upload karein" dabayein.</div>
+                  )}
+                  {!hostingOnline && activeGallery.hosting_status !== 'FAILED' && activeGallery.hosting_status !== 'EXPIRED' && (
+                    <div style={{ color: '#94a3b8', marginTop: '4px' }}>Upload complete hone ke baad link share karein.</div>
+                  )}
+                </div>
+              )}
+              {!activeGallery.hosting_url && masterReady && (
+                <div style={{
+                  display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px',
+                  background: 'rgba(245, 158, 11, 0.08)', border: '1px solid rgba(245, 158, 11, 0.25)',
+                  borderRadius: '8px', padding: '8px 12px', marginBottom: '10px', fontSize: '11.5px', color: '#fbbf24'
+                }}>
+                  <span>Yeh gallery domain setup se pehle bani thi, abhi PC link hai.</span>
+                  <button type="button" onClick={handleResyncToHosting} disabled={isResyncing} className="btn btn-primary"
+                    style={{ padding: '4px 10px', fontSize: '11px', whiteSpace: 'nowrap' }}>
+                    <Globe size={11} /> Domain par upload karein
+                  </button>
+                </div>
+              )}
+
               {/* Single Clean Ready-to-Share Link Box */}
               <div style={{
                 background: 'rgba(15, 23, 42, 0.6)',
@@ -449,9 +560,9 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
               }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981', display: 'inline-block', boxShadow: '0 0 8px rgba(16, 185, 129, 0.6)' }}></span>
-                    <span style={{ fontSize: '11px', color: '#34d399', fontWeight: 700 }}>
-                      Live Mobile &amp; PC Link Ready
+                    <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: hostingOnline ? '#10b981' : '#f59e0b', display: 'inline-block', boxShadow: hostingOnline ? '0 0 8px rgba(16, 185, 129, 0.6)' : 'none' }}></span>
+                    <span style={{ fontSize: '11px', color: hostingOnline ? '#34d399' : '#fbbf24', fontWeight: 700 }}>
+                      {hostingOnline ? 'Live Mobile & PC Link Ready' : 'Link upload ke baad live hoga'}
                     </span>
                   </div>
                   {isTunnelLoading && (
@@ -489,10 +600,13 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
                 <button
                   type="button"
                   onClick={handleShareWhatsApp}
+                  disabled={!hostingOnline}
+                  title={hostingOnline ? '' : 'Domain upload complete hone ka wait karein'}
                   style={{
                     flex: 1, padding: '10px 14px', background: 'linear-gradient(135deg, #25d366, #128c7e)', color: '#fff',
                     border: 'none', borderRadius: '8px', fontSize: '12.5px', fontWeight: 700,
-                    cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+                    opacity: hostingOnline ? 1 : 0.5,
+                    cursor: hostingOnline ? 'pointer' : 'not-allowed', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
                     boxShadow: '0 4px 12px rgba(37, 211, 102, 0.25)'
                   }}
                 >
@@ -500,7 +614,12 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => window.open(getFullShareUrl(activeGallery.gallery_uuid, 'local', true), '_blank')}
+                  onClick={() => window.open(
+                    activeGallery.hosting_url && activeGallery.hosting_status === 'ONLINE'
+                      ? getMasterShareUrl(activeGallery, true)
+                      : getFullShareUrl(activeGallery.gallery_uuid, 'local', true),
+                    '_blank'
+                  )}
                   className="btn btn-secondary"
                   style={{ padding: '10px 14px', fontSize: '12px', display: 'flex', alignItems: 'center', gap: '6px' }}
                 >
@@ -716,8 +835,15 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
                   </button>
                 </div>
                 {domainSaveMessage && (
-                  <div style={{ fontSize: '11px', color: '#34d399', marginTop: '6px' }}>
+                  <div style={{ fontSize: '11px', color: domainSaveMessage.startsWith('❌') ? '#f87171' : '#34d399', marginTop: '6px' }}>
                     {domainSaveMessage}
+                  </div>
+                )}
+                {!domainSaveMessage && masterInfo?.configured && (
+                  <div style={{ fontSize: '11px', color: masterInfo.is_master ? '#34d399' : '#f87171', marginTop: '6px' }}>
+                    {masterInfo.is_master
+                      ? `✅ Master Hosting connected: ${masterInfo.url}`
+                      : `❌ Master Hosting nahi mila: ${masterInfo.error || 'index.php not found'}`}
                   </div>
                 )}
                 <p style={{ fontSize: '10px', color: '#64748b', margin: '6px 0 0' }}>

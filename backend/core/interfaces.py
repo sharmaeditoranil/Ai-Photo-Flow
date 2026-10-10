@@ -17,6 +17,7 @@ class QualityMetrics:
     exposure_score: float    # 0 - 100
     dynamic_range_score: float # 0 - 100
     overall_quality: float   # 0 - 100 composite
+    focus_sharpness: float = -1.0  # 0 - 100, sharpness of the most detailed area (macro / detail shots)
 
 @dataclass
 class FaceMetrics:
@@ -27,6 +28,8 @@ class FaceMetrics:
     eyes_open_confidence: float
     is_close_up: bool = False
     has_emotion: bool = False
+    face_brightness: float = -1.0   # median gray (0-255) of the in-focus main face; -1 = no face
+    face_sharpness_hires: float = -1.0  # focus of the important faces checked on the full-resolution file (100% view)
 
 @dataclass
 class DuplicateGroupResult:
@@ -38,6 +41,7 @@ class DuplicateGroupResult:
 @dataclass
 class EditParameters:
     exposure: float = 0.0      # -3.0 to +3.0 EV
+    subject_exposure: float = 0.0  # -1.0 to +0.5 EV, applied through the subject mask (tames over-lit faces / subjects)
     temperature: float = 0.0   # -100 to +100 (Cool to Warm)
     tint: float = 0.0          # -100 to +100 (Green to Magenta)
     contrast: float = 0.0      # -100 to +100
@@ -56,11 +60,15 @@ class EditParameters:
     heal_face_preset: str = "AUTO" # "AUTO", "SMALL", "MEDIUM", "LARGE"
     skin_smoothing: float = 0.0 # 0 to 100 (SkinFiner-style texture-preserving facial skin smoothing)
     dodge_burn: float = 0.0    # 0 to 100 (Subtle 3D portrait sculpting: soft highlights & contours)
+    skin_glow: float = 0.0     # 0 to 100 (soft radiant glow on real skin only; the rest of the photo is untouched)
     heal_spots: List[Dict[str, float]] = field(default_factory=list) # [{'x': 0.5, 'y': 0.4, 'radius': 0.015}]
+    retouch: Optional[Dict[str, Any]] = None # AI Skin Retouch block (backend/retouch/params.py schema)
+    auto_wb: Optional[Dict[str, Any]] = None # AI Auto White Balance (backend/core/white_balance.py)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "exposure": self.exposure,
+            "subject_exposure": self.subject_exposure,
             "temperature": self.temperature,
             "tint": self.tint,
             "contrast": self.contrast,
@@ -79,13 +87,17 @@ class EditParameters:
             "heal_face_preset": self.heal_face_preset,
             "skin_smoothing": self.skin_smoothing,
             "dodge_burn": self.dodge_burn,
-            "heal_spots": self.heal_spots
+            "skin_glow": self.skin_glow,
+            "heal_spots": self.heal_spots,
+            "retouch": self.retouch,
+            "auto_wb": self.auto_wb
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'EditParameters':
         return cls(
             exposure=float(data.get("exposure", 0.0)),
+            subject_exposure=float(data.get("subject_exposure", 0.0) or 0.0),
             temperature=float(data.get("temperature", 0.0)),
             tint=float(data.get("tint", 0.0)),
             contrast=float(data.get("contrast", 0.0)),
@@ -104,7 +116,10 @@ class EditParameters:
             heal_face_preset=str(data.get("heal_face_preset", "AUTO")),
             skin_smoothing=float(data.get("skin_smoothing", 0.0)),
             dodge_burn=float(data.get("dodge_burn", 0.0)),
-            heal_spots=list(data.get("heal_spots", []))
+            skin_glow=float(data.get("skin_glow", 0.0) or 0.0),
+            heal_spots=list(data.get("heal_spots", []) or []),
+            retouch=data.get("retouch") if isinstance(data.get("retouch"), dict) else None,
+            auto_wb=data.get("auto_wb") if isinstance(data.get("auto_wb"), dict) else None
         )
 
 class ImageQualityModel(ABC):

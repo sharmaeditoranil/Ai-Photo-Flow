@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { api } from '../api';
-import { Settings, X, Key, Cpu, Cloud, Check, ShieldCheck, ExternalLink, CreditCard, Lock, ShieldAlert } from 'lucide-react';
+import { X, Key, Cpu, Cloud, Check, ShieldCheck, Settings } from 'lucide-react';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -8,52 +8,28 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose }) => {
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
-  const [pinInput, setPinInput] = useState<string>('');
-  const [pinError, setPinError] = useState<string>('');
-
   const [provider, setProvider] = useState<string>('local');
   const [replicateToken, setReplicateToken] = useState<string>('');
   const [openAiKey, setOpenAiKey] = useState<string>('');
   const [geminiKey, setGeminiKey] = useState<string>('');
   const [customEndpoint, setCustomEndpoint] = useState<string>('');
-  const [razorpayKeyId, setRazorpayKeyId] = useState<string>('');
-  const [razorpayKeySecret, setRazorpayKeySecret] = useState<string>('');
-  const [razorpayEnabled, setRazorpayEnabled] = useState<boolean>(true);
   const [savedSuccess, setSavedSuccess] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(false);
 
   useEffect(() => {
-    if (!isOpen) {
-      // Re-lock whenever modal is closed
-      setIsAuthenticated(false);
-      setPinInput('');
-      setPinError('');
-    } else if (isAuthenticated) {
+    if (isOpen) {
       api.getSettings().then((res) => {
         if (res.ai_provider) setProvider(res.ai_provider);
         if (res.replicate_api_token) setReplicateToken(res.replicate_api_token);
         if (res.openai_api_key) setOpenAiKey(res.openai_api_key);
         if (res.gemini_api_key) setGeminiKey(res.gemini_api_key);
         if (res.custom_ai_endpoint) setCustomEndpoint(res.custom_ai_endpoint);
-        if (res.razorpay_key_id) setRazorpayKeyId(res.razorpay_key_id);
-        if (res.razorpay_key_secret) setRazorpayKeySecret(res.razorpay_key_secret);
-        if (res.razorpay_enabled !== undefined) setRazorpayEnabled(res.razorpay_enabled);
       }).catch(console.error);
     }
-  }, [isOpen, isAuthenticated]);
+  }, [isOpen]);
 
   if (!isOpen) return null;
 
-  const handlePinSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (pinInput.trim() === 'Anil@#140477') {
-      setIsAuthenticated(true);
-      setPinError('');
-    } else {
-      setPinError('Incorrect Master PIN. Access Denied.');
-    }
-  };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,10 +40,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
         replicate_api_token: replicateToken,
         openai_api_key: openAiKey,
         gemini_api_key: geminiKey,
-        custom_ai_endpoint: customEndpoint,
-        razorpay_key_id: razorpayKeyId,
-        razorpay_key_secret: razorpayKeySecret,
-        razorpay_enabled: razorpayEnabled
+        custom_ai_endpoint: customEndpoint
       });
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 2500);
@@ -78,87 +51,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
     }
   };
 
-  // If not authenticated, display Admin PIN gate
-  if (!isAuthenticated) {
-    return (
-      <div className="modal-overlay">
-        <div className="modal-content" style={{ maxWidth: '400px', padding: '24px', textAlign: 'center' }}>
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer' }}>
-              <X size={18} />
-            </button>
-          </div>
-          <div style={{
-            width: '48px',
-            height: '48px',
-            borderRadius: '50%',
-            background: 'rgba(59, 130, 246, 0.15)',
-            border: '1px solid rgba(59, 130, 246, 0.3)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            margin: '0 auto 14px',
-            color: '#3b82f6'
-          }}>
-            <Lock size={22} />
-          </div>
-          <h2 style={{ fontSize: '16px', fontWeight: 700, color: '#f8fafc', marginBottom: '6px' }}>
-            Admin Control Center
-          </h2>
-          <p style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '18px', lineHeight: 1.4 }}>
-            Restricted to administrator (Anil Sharma) for Razorpay &amp; core security keys.
-          </p>
-
-          <form onSubmit={handlePinSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <input
-              type="password"
-              value={pinInput}
-              onChange={(e) => {
-                setPinInput(e.target.value);
-                setPinError('');
-              }}
-              autoFocus
-              style={{
-                width: '100%',
-                background: '#0d0e12',
-                border: pinError ? '1px solid #ef4444' : '1px solid #2c3240',
-                padding: '10px 12px',
-                borderRadius: '6px',
-                color: '#f8fafc',
-                fontSize: '14px',
-                textAlign: 'center',
-                letterSpacing: '2px',
-                outline: 'none'
-              }}
-            />
-            {pinError && (
-              <span style={{ fontSize: '12px', color: '#ef4444', fontWeight: 500 }}>
-                {pinError}
-              </span>
-            )}
-
-            <div style={{ display: 'flex', gap: '10px', marginTop: '6px' }}>
-              <button type="button" onClick={onClose} className="btn btn-secondary" style={{ flex: 1 }}>
-                Cancel
-              </button>
-              <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>
-                Unlock Admin
-              </button>
-            </div>
-          </form>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="modal-overlay">
       <div className="modal-content" style={{ maxWidth: '580px' }}>
         <div style={{ padding: '16px 20px', borderBottom: '1px solid #232733', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <Lock size={18} style={{ color: '#10b981' }} />
+            <Settings size={18} style={{ color: '#3b82f6' }} />
             <h2 style={{ fontSize: '15px', fontWeight: 700, color: '#f8fafc' }}>
-              Admin Control Center (Anil Sharma)
+              AI Processing Settings
             </h2>
           </div>
           <button onClick={onClose} style={{ background: 'transparent', border: 'none', color: '#94a3b8', cursor: 'pointer' }}>
@@ -329,84 +230,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose })
             </div>
           </div>
 
-          {/* Razorpay Payment Gateway Configuration */}
-          <div style={{ background: '#13151a', padding: '14px', borderRadius: '8px', border: '1px solid #232733', display: 'flex', flexDirection: 'column', gap: '12px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <CreditCard size={14} style={{ color: '#3b82f6' }} />
-                <span style={{ fontSize: '12px', fontWeight: 700, color: '#e2e8f0' }}>Razorpay Payment Gateway</span>
-              </div>
-              <label style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#94a3b8', cursor: 'pointer' }}>
-                <input
-                  type="checkbox"
-                  checked={razorpayEnabled}
-                  onChange={(e) => setRazorpayEnabled(e.target.checked)}
-                />
-                <span>Enable Payments</span>
-              </label>
-            </div>
-
-            <p style={{ margin: 0, fontSize: '11px', color: '#94a3b8', lineHeight: 1.4 }}>
-              Customer UPI (GPay, PhonePe, Paytm), QR Code, Cards ya NetBanking se payment karega aur software automatically unlock ho jayega.
-            </p>
-
-            {/* Razorpay Key ID */}
-            <div>
-              <label style={{ display: 'block', fontSize: '11px', color: '#94a3b8', marginBottom: '4px' }}>
-                Razorpay Key ID (rzp_live_... ya rzp_test_...)
-              </label>
-              <input
-                type="text"
-                value={razorpayKeyId}
-                onChange={(e) => setRazorpayKeyId(e.target.value)}
-                placeholder="rzp_live_••••••••••••••••"
-                style={{
-                  width: '100%',
-                  background: '#0d0e12',
-                  border: '1px solid #2c3240',
-                  padding: '7px 10px',
-                  borderRadius: '5px',
-                  color: '#f8fafc',
-                  fontSize: '12px',
-                  fontFamily: 'monospace',
-                  outline: 'none'
-                }}
-              />
-            </div>
-
-            {/* Razorpay Key Secret */}
-            <div>
-              <label style={{ display: 'block', fontSize: '11px', color: '#94a3b8', marginBottom: '4px' }}>
-                Razorpay Key Secret
-              </label>
-              <input
-                type="password"
-                value={razorpayKeySecret}
-                onChange={(e) => setRazorpayKeySecret(e.target.value)}
-                placeholder="••••••••••••••••••••••••"
-                style={{
-                  width: '100%',
-                  background: '#0d0e12',
-                  border: '1px solid #2c3240',
-                  padding: '7px 10px',
-                  borderRadius: '5px',
-                  color: '#f8fafc',
-                  fontSize: '12px',
-                  fontFamily: 'monospace',
-                  outline: 'none'
-                }}
-              />
-            </div>
-
-            <div style={{ fontSize: '10px', color: '#64748b' }}>
-              Razorpay Keys Dashboard se lein:{' '}
-              <span style={{ color: '#38bdf8' }}>dashboard.razorpay.com &gt; Settings &gt; API Keys</span>
-            </div>
-          </div>
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '11px', color: '#64748b' }}>
             <ShieldCheck size={13} style={{ color: '#10b981' }} />
-            <span>Credentials and API keys are stored encrypted in your local SQLite database on this Mac.</span>
+            <span>API keys are saved only on this computer. Payments, prices and licenses are managed in the online Admin Panel.</span>
           </div>
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '6px' }}>

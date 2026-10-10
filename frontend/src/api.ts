@@ -1,4 +1,4 @@
-import { Project, Photo, BatchJob, EditParameters, UserSelection } from './types';
+import { Project, Photo, BatchJob, EditParameters, UserSelection, RetouchParams, RetouchPreset, MasterHostingInfo } from './types';
 
 const electronAPI = typeof window !== 'undefined' ? (window as any).electronAPI : undefined;
 
@@ -51,6 +51,18 @@ async function fetchWithRetry(url: string, options?: RequestInit, retries = 30, 
     }
   }
   throw new Error(`Cannot connect to AI Processing Engine (127.0.0.1:${BACKEND_PORT}). Please restart Ai PhotoFlow. If this keeps happening, send the log file from %USERPROFILE%\\.photoflow\\backend.log (${lastError?.message || lastError})`);
+}
+
+/** Error carrying the backend's own message and HTTP status (403 = license needed). */
+async function apiError(res: Response, fallback: string): Promise<Error> {
+  let detail = '';
+  try {
+    const body = await res.json();
+    detail = typeof body?.detail === 'string' ? body.detail : '';
+  } catch (_) { /* not JSON */ }
+  const err: any = new Error(detail || fallback);
+  err.status = res.status;
+  return err;
 }
 
 export const api = {
@@ -151,8 +163,8 @@ export const api = {
     await fetch(`${API_BASE}/photos/${photoId}/reset-edits`, { method: 'POST' });
   },
 
-  async autoEditSingle(photoId: number, presetName = 'Natural Wedding'): Promise<{ edit_params: EditParameters }> {
-    const res = await fetch(`${API_BASE}/photos/${photoId}/auto-edit?preset_name=${encodeURIComponent(presetName)}`, {
+  async autoEditSingle(photoId: number, presetName = 'Natural Wedding', retouchPreset = 'Natural'): Promise<{ edit_params: EditParameters }> {
+    const res = await fetch(`${API_BASE}/photos/${photoId}/auto-edit?preset_name=${encodeURIComponent(presetName)}&retouch_preset=${encodeURIComponent(retouchPreset)}`, {
       method: 'POST'
     });
     if (!res.ok) throw new Error('Auto edit failed');
@@ -162,7 +174,7 @@ export const api = {
   // Batch operations
   async startCulling(projectId: number): Promise<{ job_id: string }> {
     const res = await fetch(`${API_BASE}/projects/${projectId}/cull`, { method: 'POST' });
-    if (!res.ok) throw new Error('Failed to start culling');
+    if (!res.ok) throw await apiError(res, 'Failed to start culling');
     return res.json();
   },
 
@@ -172,13 +184,13 @@ export const api = {
     return res.json();
   },
 
-  async startAutoEdit(projectId: number, presetName: string, photoIds?: number[]): Promise<{ job_id: string }> {
+  async startAutoEdit(projectId: number, presetName: string, photoIds?: number[], retouchPreset = 'Natural'): Promise<{ job_id: string }> {
     const res = await fetch(`${API_BASE}/projects/${projectId}/auto-edit`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ preset_name: presetName, photo_ids: photoIds }),
+      body: JSON.stringify({ preset_name: presetName, photo_ids: photoIds, retouch_preset: retouchPreset }),
     });
-    if (!res.ok) throw new Error('Failed to start auto edit');
+    if (!res.ok) throw await apiError(res, 'Failed to start auto edit');
     return res.json();
   },
 
@@ -194,7 +206,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(options),
     });
-    if (!res.ok) throw new Error('Failed to start export');
+    if (!res.ok) throw await apiError(res, 'Failed to start export');
     return res.json();
   },
 
@@ -236,6 +248,16 @@ export const api = {
     return `${API_BASE}/photos/${photoId}/original`;
   },
 
+  async getRetouchPresets(): Promise<{ presets: RetouchPreset[]; defaults: RetouchParams }> {
+    const res = await fetch(`${API_BASE}/retouch/presets`);
+    if (!res.ok) throw new Error('Failed to load retouch presets');
+    return res.json();
+  },
+
+  getRetouchMaskUrl(photoId: number, kind: 'skin' | 'heal' | 'shine', t?: number): string {
+    return `${API_BASE}/photos/${photoId}/retouch-mask?kind=${kind}${t ? `&t=${t}` : ''}`;
+  },
+
   getPreviewUrl(photoId: number, t?: number): string {
     return `${API_BASE}/photos/${photoId}/preview${t ? `?t=${t}` : ''}`;
   },
@@ -260,10 +282,28 @@ export const api = {
     if (!res.ok) throw new Error('Failed to save settings');
   },
 
-  // Licensing & Pricing
+  // Licensing & Pricing — decided by the online License Server (aiphotoflow.in/license)
   async getLicenseStatus(): Promise<any> {
     const res = await fetch(`${API_BASE}/license/status`);
     if (!res.ok) throw new Error('Failed to get license status');
+    return res.json();
+  },
+
+  async refreshLicense(): Promise<any> {
+    const res = await fetch(`${API_BASE}/license/refresh`, { method: 'POST' });
+    if (!res.ok) throw new Error('Failed to refresh license');
+    return res.json();
+  },
+
+  async getLicenseProfile(): Promise<any> {
+    const res = await fetch(`${API_BASE}/license/profile`);
+    if (!res.ok) throw new Error('Failed to load profile');
+    return res.json();
+  },
+
+  async getLicensePlans(): Promise<any> {
+    const res = await fetch(`${API_BASE}/license/plans`);
+    if (!res.ok) throw new Error('Failed to load plans');
     return res.json();
   },
 
@@ -273,10 +313,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code, plan_id: planId, billing_cycle: billingCycle, currency }),
     });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || 'Failed to verify coupon');
-    }
+    if (!res.ok) throw new Error('Failed to verify coupon');
     return res.json();
   },
 
@@ -287,191 +324,49 @@ export const api = {
       body: JSON.stringify({ license_key: licenseKey, user_name: userName, user_email: userEmail }),
     });
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || 'Failed to activate license');
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Activation failed');
     }
     return res.json();
   },
 
-  async adminGrantFree(adminPin: string, planType: string = 'VIP_LIFETIME', clientName?: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/license/admin/grant-free`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ admin_pin: adminPin, plan_type: planType, client_name: clientName }),
-    });
+  async deactivateLicense(): Promise<any> {
+    const res = await fetch(`${API_BASE}/license/deactivate`, { method: 'POST' });
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || 'Admin validation failed');
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Could not remove license from this computer');
     }
     return res.json();
   },
 
-  async adminGenerateKey(adminPin: string, planType: string = 'PRO', days: number = 365, clientName?: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/license/admin/generate-key`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ admin_pin: adminPin, plan_type: planType, days, client_name: clientName }),
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || 'Failed to generate key');
-    }
-    return res.json();
-  },
-
-  async adminCreateCoupon(adminPin: string, code: string, discountPercent: number, notes?: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/license/admin/create-coupon`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ admin_pin: adminPin, code, discount_percent: discountPercent, notes }),
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || 'Failed to create coupon');
-    }
-    return res.json();
-  },
-
-  // Razorpay Payments
-  async getPaymentConfig(): Promise<any> {
-    const res = await fetch(`${API_BASE}/payment/config`);
-    if (!res.ok) throw new Error('Failed to get payment config');
-    return res.json();
-  },
-
-  async createRazorpayOrder(planId: string, billingCycle: string, customerName?: string, customerEmail?: string, couponCode?: string, currency: string = 'INR'): Promise<any> {
+  async createRazorpayOrder(
+    planId: string, billingCycle: string, customerName: string, customerEmail: string,
+    customerPhone: string, couponCode?: string, currency: string = 'INR'
+  ): Promise<any> {
     const res = await fetch(`${API_BASE}/payment/create-order`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        plan_id: planId,
-        billing_cycle: billingCycle,
-        customer_name: customerName,
-        customer_email: customerEmail,
-        coupon_code: couponCode,
-        currency
+        plan_id: planId, billing_cycle: billingCycle, customer_name: customerName, customer_email: customerEmail,
+        customer_phone: customerPhone, coupon_code: couponCode || null, currency,
       }),
     });
     if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || 'Failed to create payment order');
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Could not start payment');
     }
     return res.json();
   },
 
-  async verifyRazorpayPayment(orderId: string, paymentId: string, signature?: string, clientName?: string, clientEmail?: string): Promise<any> {
+  async verifyRazorpayPayment(orderId: string, paymentId: string, signature: string): Promise<any> {
     const res = await fetch(`${API_BASE}/payment/verify-payment`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        order_id: orderId,
-        payment_id: paymentId,
-        signature,
-        client_name: clientName,
-        client_email: clientEmail
-      }),
+      body: JSON.stringify({ razorpay_order_id: orderId, razorpay_payment_id: paymentId, razorpay_signature: signature }),
     });
     if (!res.ok) {
-      const err = await res.json();
+      const err = await res.json().catch(() => ({}));
       throw new Error(err.detail || 'Payment verification failed');
-    }
-    return res.json();
-  },
-
-  // Admin & Affiliate Marketing Management
-  async getAdminOverview(): Promise<any> {
-    const res = await fetch(`${API_BASE}/admin/overview`);
-    if (!res.ok) throw new Error('Failed to get admin overview');
-    return res.json();
-  },
-
-  async getAdminAgents(): Promise<any[]> {
-    const res = await fetch(`${API_BASE}/admin/agents`);
-    if (!res.ok) throw new Error('Failed to fetch agents');
-    return res.json();
-  },
-
-  async createAdminAgent(data: any): Promise<any> {
-    const res = await fetch(`${API_BASE}/admin/agents`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || 'Failed to create agent');
-    }
-    return res.json();
-  },
-
-  async updateAdminAgent(agentId: number, data: any): Promise<any> {
-    const res = await fetch(`${API_BASE}/admin/agents/${agentId}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || 'Failed to update agent');
-    }
-    return res.json();
-  },
-
-  async deleteAdminAgent(agentId: number): Promise<any> {
-    const res = await fetch(`${API_BASE}/admin/agents/${agentId}`, {
-      method: 'DELETE',
-    });
-    if (!res.ok) throw new Error('Failed to delete agent');
-    return res.json();
-  },
-
-  async getAdminReferralSales(): Promise<any[]> {
-    const res = await fetch(`${API_BASE}/admin/referral-sales`);
-    if (!res.ok) throw new Error('Failed to fetch referral sales');
-    return res.json();
-  },
-
-  async recordManualReferralSale(data: any): Promise<any> {
-    const res = await fetch(`${API_BASE}/admin/referral-sales`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || 'Failed to record manual sale');
-    }
-    return res.json();
-  },
-
-  async payAdminCommission(saleId: number, payoutRef: string, notes?: string): Promise<any> {
-    const res = await fetch(`${API_BASE}/admin/commissions/${saleId}/pay`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ payout_ref: payoutRef, notes }),
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || 'Failed to mark commission paid');
-    }
-    return res.json();
-  },
-
-  async getAdminUsers(): Promise<any[]> {
-    const res = await fetch(`${API_BASE}/admin/users`);
-    if (!res.ok) throw new Error('Failed to fetch active users');
-    return res.json();
-  },
-
-  async issueAdminUserLicense(data: any): Promise<any> {
-    const res = await fetch(`${API_BASE}/admin/users/issue-license`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!res.ok) {
-      const err = await res.json();
-      throw new Error(err.detail || 'Failed to issue license');
     }
     return res.json();
   },
@@ -540,6 +435,25 @@ export const api = {
 
   async startPublicTunnel(): Promise<{ success: boolean; url?: string; status: string; error?: string; local_ip: string }> {
     const res = await fetch(`${API_BASE}/proofing/tunnel/start`, { method: 'POST' });
+    return res.json();
+  },
+
+  async checkMasterHosting(url?: string): Promise<MasterHostingInfo> {
+    const res = await fetch(`${API_BASE}/proofing/hosting/check`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url: url ?? null }),
+    });
+    if (!res.ok) throw new Error('Hosting check failed');
+    return res.json();
+  },
+
+  async resyncGalleryToHosting(galleryUuid: string): Promise<{ status: string; hosting_url: string }> {
+    const res = await fetch(`${API_BASE}/proofing/gallery/${galleryUuid}/hosting-sync`, { method: 'POST' });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.detail || 'Upload to domain failed');
+    }
     return res.json();
   },
 

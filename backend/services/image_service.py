@@ -3,6 +3,7 @@ Image Processing Service
 Handles image loading (JPG/PNG/RAW), thumbnail generation, non-destructive editing pipeline, and high-res export.
 """
 import os
+import io
 import cv2
 import numpy as np
 from PIL import Image, ImageEnhance, ImageOps
@@ -10,6 +11,8 @@ from typing import Optional, Tuple, Dict, Any
 from backend.core.interfaces import EditParameters
 from backend.core.subject_model import SubjectDetectionEngine
 from backend.core.face_model import OpenCVFaceModel
+from backend.retouch import retouch_image, resolve_params as resolve_retouch_params
+from backend.core.white_balance import apply_white_balance, effective_gains as wb_effective_gains
 
 try:
     subject_engine = SubjectDetectionEngine()
@@ -26,7 +29,7 @@ CACHE_DIR = os.path.join(APP_DATA_DIR, "cache")
 os.makedirs(os.path.join(CACHE_DIR, "thumbnails"), exist_ok=True)
 os.makedirs(os.path.join(CACHE_DIR, "previews"), exist_ok=True)
 
-RAW_EXTENSIONS = {'.arw', '.cr2', '.cr3', '.nef', '.dng', '.orf', '.rw2'}
+from backend.services.raw_decoder import RAW_EXTENSIONS, decode_raw
 
 def is_raw_format(filepath: str) -> bool:
     ext = os.path.splitext(filepath)[1].lower()
@@ -39,19 +42,24 @@ def load_image(filepath: str, max_dim: Optional[int] = None) -> np.ndarray:
     """
     if is_raw_format(filepath):
         try:
-            import rawpy
-            with rawpy.imread(filepath) as raw:
-                # Fast half-size demosaic if preview requested
-                rgb = raw.postprocess(use_camera_wb=True, half_size=(max_dim is not None))
-                if max_dim:
-                    h, w = rgb.shape[:2]
-                    scale = min(max_dim / max(h, w), 1.0)
-                    if scale < 1.0:
-                        rgb = cv2.resize(rgb, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-                return rgb
-        except Exception as e:
-            # Fallback to OpenCV if rawpy fails or not supported
-            pass
+            # Professional 16-bit linear development matched to the camera's own rendering (raw_decoder.py)
+            return decode_raw(filepath, max_dim=max_dim)
+        except Exception:
+            # Unsupported / damaged RAW: fall back to its embedded camera JPEG below
+            try:
+                import rawpy
+                with rawpy.imread(filepath) as raw:
+                    thumb = raw.extract_thumb()
+                if thumb.format == rawpy.ThumbFormat.JPEG:
+                    pil_img = ImageOps.exif_transpose(Image.open(io.BytesIO(thumb.data)))
+                    if max_dim:
+                        w, h = pil_img.size
+                        scale = min(max_dim / max(w, h), 1.0)
+                        if scale < 1.0:
+                            pil_img = pil_img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
+                    return np.array(pil_img.convert("RGB"))
+            except Exception:
+                pass
 
     # Standard reading via Pillow / OpenCV
     try:
@@ -197,13 +205,42 @@ def apply_edit_pipeline(
     except Exception:
         detected_face_boxes = detected_face_boxes or []
         cached_skin_feather = None
+    src_u8 = orig_u8                       # camera colours, kept for the Skin Colour Lock (step 8.5)
     orig_u8 = None
+
+    # 0. AI Skin Retouch (Heal -> Mattifier -> Skin Details -> Imperfections -> Skin Tone) on the
+    #    camera's original pixels (skin keeps its natural colour there, so the per-person skin mask is
+    #    complete even when white balance later cools the scene), gated by that mask.
+    retouch_skin = None
+    rt_params = resolve_retouch_params(params)
+    if rt_params:
+        try:
+            img, rt_res = retouch_image(rgb_image, rt_params, want_masks=True)
+            retouch_skin = rt_res.skin_mask
+        except Exception:
+            img = rgb_image.astype(np.float32)
+            retouch_skin = None
+
+    # 0.5. AI Auto White Balance (neutral colour, verified on skin tone)
+    wb_gains = wb_effective_gains(getattr(params, 'auto_wb', None))
+    if wb_gains is not None:
+        try:
+            img = np.clip(apply_white_balance(img, wb_gains), 0, 255).astype(np.float32)
+        except Exception:
+            pass
 
     # 1. Straighten / Rotate if non-zero
     if abs(params.straighten) > 0.2:
         center = (w / 2.0, h / 2.0)
-        rot_mat = cv2.getRotationMatrix2D(center, params.straighten, 1.0)
+        # Zoom just enough that the rotated frame has no empty / mirrored corners (crop-to-fill)
+        th = np.radians(abs(params.straighten))
+        fill = float(np.cos(th) + np.sin(th) * max(w, h) / float(min(w, h)))
+        rot_mat = cv2.getRotationMatrix2D(center, params.straighten, fill)
         img = cv2.warpAffine(img, rot_mat, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
+        if retouch_skin is not None:
+            retouch_skin = cv2.warpAffine(retouch_skin, rot_mat, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT)
+        if src_u8 is not None:
+            src_u8 = cv2.warpAffine(src_u8, rot_mat, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
 
     # 2. Advanced Exposure with Soft-Shoulder Highlight Roll-off
     if abs(params.exposure) > 0.01:
@@ -288,6 +325,21 @@ def apply_edit_pipeline(
                 img *= zone_gain[:, :, np.newaxis]
                 del zone_gain
                 np.clip(img, 0.0, 255.0, out=img)
+
+        # 3.6 Subject Light: tame an over-lit subject (flash-blown faces, white outfits in sun) through the
+        # feathered subject mask. Bright parts of the subject get the full correction, midtones a third of it,
+        # so hair, eyes and jewellery detail keep their depth and the background is left alone.
+        subj_ev = float(getattr(params, 'subject_exposure', 0.0) or 0.0)
+        if abs(subj_ev) > 0.01 and subject_mask is not None:
+            luma = img[:, :, 0] * (0.299 / 255.0) + img[:, :, 1] * (0.587 / 255.0) + img[:, :, 2] * (0.114 / 255.0)
+            t = np.clip((luma - 0.40) / 0.45, 0.0, 1.0)
+            weight = 0.35 + 0.65 * (t * t * (3.0 - 2.0 * t))
+            if subj_ev > 0:
+                weight = 1.0 - 0.65 * (t * t * (3.0 - 2.0 * t))   # lifting: protect what is already bright
+            gain = 1.0 + np.clip(subject_mask, 0.0, 1.0) * weight * (2.0 ** subj_ev - 1.0)
+            img *= gain[:, :, np.newaxis].astype(np.float32)
+            del gain, weight, t, luma
+            np.clip(img, 0.0, 255.0, out=img)
     except Exception:
         pass
     subject_mask = None
@@ -320,8 +372,13 @@ def apply_edit_pipeline(
     try:
         clahe = cv2.createCLAHE(clipLimit=1.5, tileGridSize=(8, 8))
         clahe_L = clahe.apply(L_u8).astype(np.float32)
-        # Blend 25% CLAHE for crisp micro-contrast without halos
-        L = L * 0.75 + clahe_L * 0.25
+        # Blend 25% CLAHE for crisp micro-contrast without halos (much less on retouched skin)
+        if retouch_skin is not None:
+            w_cl = 0.25 * (1.0 - 0.8 * retouch_skin)
+            L = L * (1.0 - w_cl) + clahe_L * w_cl
+            del w_cl
+        else:
+            L = L * 0.75 + clahe_L * 0.25
     except Exception:
         pass
 
@@ -371,22 +428,7 @@ def apply_edit_pipeline(
                 lab[:, :, 1] = cv2.resize(a_filt, (aw, ah), interpolation=cv2.INTER_LINEAR).astype(np.float32)
                 lab[:, :, 2] = cv2.resize(b_filt, (aw, ah), interpolation=cv2.INTER_LINEAR).astype(np.float32)
 
-        # 2. Subtle Natural Skin Smoothing (Frequency-Separated to Keep All Micro-Textures)
-        # Smooths minor skin blemishes/unevenness while protecting eyes, lips, hair & jewelry
-        # Compute smooth skin mask from proxy if available to avoid two redundant 24MP conversions
-        if cached_skin_feather is not None:
-            flat_skin = np.clip(1.0 - (edge_mag / 28.0), 0.0, 1.0)
-            skin_mask = cached_skin_feather * flat_skin
-        else:
-            temp_rgb = cv2.cvtColor(np.clip(lab, 0, 255).astype(np.uint8), cv2.COLOR_LAB2RGB)
-            ycrcb = cv2.cvtColor(temp_rgb, cv2.COLOR_RGB2YCrCb)
-            cr = ycrcb[:, :, 1]
-            cb = ycrcb[:, :, 2]
-            skin_raw = (cr >= 133) & (cr <= 173) & (cb >= 77) & (cb <= 127)
-            flat_skin = np.clip(1.0 - (edge_mag / 28.0), 0.0, 1.0)
-            skin_mask = cv2.GaussianBlur(skin_raw.astype(np.float32) * flat_skin, (7, 7), sigmaX=2.0)
-
-        del flat_mask, flat_skin
+        del flat_mask
 
         # 3. High-Pass Detail Extraction (Eyelashes, pupils, hair, fabric embroidery, jewelry facets)
         # crisp_boost = (high_pass_micro * 0.48 + high_pass_mid * 0.22), built in-place
@@ -399,14 +441,6 @@ def apply_edit_pipeline(
         high_pass_mid *= 0.22
         crisp_boost += high_pass_mid
         del high_pass_mid
-
-        # Apply gentle 20% surface tone smoothing ONLY on flat skin regions
-        if np.any(skin_mask > 0.05):
-            L_smooth = cv2.bilateralFilter(np.clip(L, 0, 255).astype(np.uint8), d=7, sigmaColor=14, sigmaSpace=9).astype(np.float32)
-            skin_blend = skin_mask * 0.20
-            L = L * (1.0 - skin_blend) + L_smooth * skin_blend
-            del L_smooth, skin_blend
-        del skin_mask
 
         # 4. Authentic High-Pass Crisp Re-injection & Edge Enhancement
         # User requirement: "halka sa kam kariye jayada nhai ekdam halak sa kam kariyega"
@@ -421,6 +455,9 @@ def apply_edit_pipeline(
         # Gentle, natural crisp enhancement: maintains full original sharpness + delicate crisp definition
         crisp_boost *= edge_weight
         del edge_weight
+        # Retouched skin must stay smooth: re-sharpening it would bring the removed texture back
+        if retouch_skin is not None:
+            crisp_boost *= (1.0 - 0.8 * retouch_skin)
         L = L + crisp_boost
         del crisp_boost
         np.clip(L, 0.0, 255.0, out=L)
@@ -456,7 +493,7 @@ def apply_edit_pipeline(
         img = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB).astype(np.float32)
         del hsv
 
-    # 5.5. Luminance-Neutral Warm Golden-Orange Skin Tone Radiance (Signature Wedding Glow)
+    # 5.5. Luminance-Neutral gentle skin radiance (Signature Wedding Glow, kept subtle: no yellow cast)
     # Strictly bypassed in Pure Light mode so original colors remain 100% untouched!
     if not is_pure_light:
         try:
@@ -466,10 +503,9 @@ def apply_edit_pipeline(
                 # Measure pre-warmth perceived luminance
                 Y_before = 0.299 * img[:, :, 0] + 0.587 * img[:, :, 1] + 0.114 * img[:, :, 2]
 
-                # Warm Golden-Orange tone matrix (applied in-place per channel)
-                img[:, :, 0] *= (1.0 + (0.060 * skin_f))
-                img[:, :, 1] *= (1.0 + (0.024 * skin_f))
-                img[:, :, 2] *= (1.0 - (0.075 * skin_f))
+                # Gentle warm skin radiance (red-led, no green, so skin glows without turning yellow)
+                img[:, :, 0] *= (1.0 + (0.025 * skin_f))
+                img[:, :, 2] *= (1.0 - (0.020 * skin_f))
 
                 # Measure post-warmth perceived luminance
                 Y_after = 0.299 * img[:, :, 0] + 0.587 * img[:, :, 1] + 0.114 * img[:, :, 2]
@@ -482,87 +518,6 @@ def apply_edit_pipeline(
                 img *= scale[:, :, np.newaxis]
                 del scale
                 np.clip(img, 0.0, 255.0, out=img)
-        except Exception:
-            pass
-
-    # 6. SkinFiner-Style Texture-Preserving Facial Skin Smoothing (Fast Face-Localized & Proxy-Accelerated)
-    skin_smoothing = float(getattr(params, 'skin_smoothing', 0.0) or 0.0)
-    if skin_smoothing > 1.0:
-        try:
-            h, w = img.shape[:2]
-            f_boxes = detected_face_boxes
-            strength_factor = min(0.85, (skin_smoothing / 100.0) * 0.85)
-
-            if f_boxes:
-                # High-speed localized processing per detected face
-                for fb in f_boxes:
-                    fx, fy, fw, fh = fb['x'], fb['y'], fb['w'], fb['h']
-                    pad_x, pad_y = int(fw * 0.25), int(fh * 0.25)
-                    x1, y1 = max(0, fx - pad_x), max(0, fy - pad_y)
-                    x2, y2 = min(w, fx + fw + pad_x), min(h, fy + fh + pad_y)
-                    fc = np.clip(img[y1:y2, x1:x2], 0, 255).astype(np.uint8)
-                    fch, fcw = fc.shape[:2]
-                    if fch < 12 or fcw < 12:
-                        continue
-
-                    ycrcb_fc = cv2.cvtColor(fc, cv2.COLOR_RGB2YCrCb)
-                    Y_fc, Cr_fc, Cb_fc = ycrcb_fc[:, :, 0], ycrcb_fc[:, :, 1], ycrcb_fc[:, :, 2]
-                    hsv_fc = cv2.cvtColor(fc, cv2.COLOR_RGB2HSV)
-                    S_fc, V_fc = hsv_fc[:, :, 1], hsv_fc[:, :, 2]
-                    skin_base = (Cr_fc >= 128) & (Cr_fc <= 180) & (Cb_fc >= 75) & (Cb_fc <= 135) & (Y_fc >= 32) & (S_fc >= 15) & (S_fc <= 215)
-
-                    gray_fc = cv2.cvtColor(fc, cv2.COLOR_RGB2GRAY)
-                    edge_mag_fc = cv2.magnitude(cv2.Sobel(gray_fc, cv2.CV_32F, 1, 0, ksize=3), cv2.Sobel(gray_fc, cv2.CV_32F, 0, 1, ksize=3))
-                    protected_skin = skin_base & (edge_mag_fc < 65.0) & (V_fc > 38) & (Cr_fc < 175)
-
-                    if np.any(protected_skin):
-                        skin_mask_f = protected_skin.astype(np.float32)
-                        ksize = max(7, (min(fch, fcw) // 55) | 1)
-                        skin_mask_f = cv2.GaussianBlur(skin_mask_f, (ksize, ksize), 0)
-
-                        if max(fch, fcw) > 600:
-                            fc_s = cv2.resize(fc, (fcw // 2, fch // 2), interpolation=cv2.INTER_AREA)
-                            bilat_s = cv2.bilateralFilter(fc_s, d=7, sigmaColor=55.0, sigmaSpace=25.0)
-                            bilateral = cv2.resize(bilat_s, (fcw, fch), interpolation=cv2.INTER_LINEAR)
-                        else:
-                            bilateral = cv2.bilateralFilter(fc, d=7, sigmaColor=55.0, sigmaSpace=30.0)
-                        texture_blur = cv2.GaussianBlur(fc, (5, 5), 0)
-                        texture_high = fc.astype(np.float32) - texture_blur.astype(np.float32)
-                        smooth_layer = np.clip(bilateral.astype(np.float32) + 0.30 * texture_high, 0, 255)
-                        alpha = skin_mask_f[:, :, np.newaxis] * strength_factor
-                        img[y1:y2, x1:x2] = (img[y1:y2, x1:x2] * (1.0 - alpha)) + (smooth_layer * alpha)
-            else:
-                # Full canvas proxy bilateral fallback when no face is found
-                img_u8 = np.clip(img, 0, 255).astype(np.uint8)
-                scale_down = 3
-                small = cv2.resize(img_u8, (max(1, w // scale_down), max(1, h // scale_down)))
-                bilat_small = cv2.bilateralFilter(small, d=7, sigmaColor=50.0, sigmaSpace=25.0)
-                bilateral = cv2.resize(bilat_small, (w, h), interpolation=cv2.INTER_LINEAR)
-                del small, bilat_small
-                texture_blur = cv2.GaussianBlur(img_u8, (5, 5), 0)
-                # smooth_layer = clip(bilateral + 0.30 * texture_high, 0, 255), built in-place
-                smooth_layer = img_u8.astype(np.float32) - texture_blur.astype(np.float32)
-                del texture_blur
-                smooth_layer *= 0.30
-                smooth_layer += bilateral.astype(np.float32)
-                del bilateral
-                np.clip(smooth_layer, 0, 255, out=smooth_layer)
-                ycrcb_full = cv2.cvtColor(img_u8, cv2.COLOR_RGB2YCrCb)
-                del img_u8
-                skin_base = (ycrcb_full[:, :, 1] >= 128) & (ycrcb_full[:, :, 1] <= 180) & (ycrcb_full[:, :, 2] >= 75) & (ycrcb_full[:, :, 2] <= 135)
-                del ycrcb_full
-                skin_mask_f = cv2.GaussianBlur(skin_base.astype(np.float32), (15, 15), 0)
-                del skin_base
-                alpha = skin_mask_f[:, :, np.newaxis] * strength_factor
-                del skin_mask_f
-                # img = img * (1 - alpha) + smooth_layer * alpha
-                smooth_layer *= alpha
-                np.subtract(1.0, alpha, out=alpha)
-                img *= alpha
-                del alpha
-                img += smooth_layer
-                del smooth_layer
-            np.clip(img, 0.0, 255.0, out=img)
         except Exception:
             pass
 
@@ -608,8 +563,121 @@ def apply_edit_pipeline(
         except Exception:
             pass
 
+    # 8.5. Skin Colour Lock: global steps (clean-colour cooling, contrast, highlight recovery) can leave skin
+    #      ashy / pale. Skin gets back the camera's natural skin colour (never yellower than skin-natural,
+    #      slightly richer), on the per-person retouch skin mask only.
+    if retouch_skin is not None and src_u8 is not None:
+        try:
+            _skin_colour_lock(img, src_u8, retouch_skin)
+        except Exception:
+            pass
+
+    # 9. Skin Glow: soft radiance on real skin only (per-person retouch skin mask: no eyes, lips, hair,
+    #    clothes or background). Luminance-only, so the skin colour stays the same; it lifts the skin's own
+    #    soft highlights (cheekbones, forehead, nose bridge) and fades out before white, so nothing clips.
+    skin_glow = float(getattr(params, 'skin_glow', 0.0) or 0.0)
+    if skin_glow > 0.5 and retouch_skin is not None:
+        try:
+            _apply_skin_glow(img, retouch_skin, skin_glow / 100.0)
+        except Exception:
+            pass
+
     # Final uint8 clipping
     return np.clip(img, 0, 255).astype(np.uint8)
+
+
+SKIN_LOCK_HUE_MAX = 50.0     # Lab hue above this reads yellow: the lock never restores more yellow than this
+SKIN_LOCK_HUE_MIN = 34.0     # below this skin reads pink / magenta
+SKIN_LOCK_CHROMA = 1.04      # a touch richer than the camera, so skin looks healthy, not grey
+
+
+def _skin_colour_lock(img: np.ndarray, src_u8: np.ndarray, skin_mask: np.ndarray) -> None:
+    """In-place on float32 RGB 0..255. Shifts Lab a*/b* of the skin so its median colour matches the camera's
+    skin colour (hue clamped to the natural range, chroma +4%). Luminance is untouched."""
+    h, w = img.shape[:2]
+    if src_u8.shape[:2] != (h, w) or skin_mask.shape[:2] != (h, w):
+        return
+    m = np.clip(skin_mask.astype(np.float32), 0.0, 1.0)
+    s = min(1.0, 900.0 / float(max(h, w)))
+    sw, sh = max(1, int(w * s)), max(1, int(h * s))
+    ms = cv2.resize(m, (sw, sh), interpolation=cv2.INTER_AREA)
+    core = ms > 0.6
+    if int(core.sum()) < 60:
+        return
+    lab_src = cv2.cvtColor(cv2.resize(src_u8, (sw, sh), interpolation=cv2.INTER_AREA), cv2.COLOR_RGB2LAB).astype(np.float32)
+    cur_s = cv2.resize(np.clip(img, 0, 255).astype(np.uint8), (sw, sh), interpolation=cv2.INTER_AREA)
+    lab_cur = cv2.cvtColor(cur_s, cv2.COLOR_RGB2LAB).astype(np.float32)
+    a0, b0 = float(np.median(lab_src[..., 1][core])) - 128.0, float(np.median(lab_src[..., 2][core])) - 128.0
+    a1, b1 = float(np.median(lab_cur[..., 1][core])) - 128.0, float(np.median(lab_cur[..., 2][core])) - 128.0
+    c0 = float(np.hypot(a0, b0))
+    if c0 < 4.0:
+        return                                        # monochrome-ish source: nothing to lock to
+    hue = float(np.degrees(np.arctan2(b0, a0)))
+    hue = float(np.clip(hue, SKIN_LOCK_HUE_MIN, SKIN_LOCK_HUE_MAX))
+    c_t = c0 * SKIN_LOCK_CHROMA
+    at, bt = c_t * np.cos(np.radians(hue)), c_t * np.sin(np.radians(hue))
+    da, db = float(np.clip(at - a1, -12.0, 12.0)), float(np.clip(bt - b1, -12.0, 12.0))
+    if abs(da) < 0.6 and abs(db) < 0.6:
+        return
+    # Weight: the skin mask with its feature holes (around eyes, lips, brows) filled, so the whole face shifts
+    # as one surface - no grey rings around the mouth or eyes. Eye whites and teeth (bright, colourless in
+    # the camera image) are left out so they never turn warm.
+    k = max(3, int(0.04 * max(sw, sh))) | 1
+    filled = cv2.morphologyEx(ms, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k)))
+    holes = np.clip(filled - ms, 0.0, 1.0)
+    c_src = np.hypot(lab_src[..., 1] - 128.0, lab_src[..., 2] - 128.0)
+    whites = (c_src < 8.0) & (lab_src[..., 0] > 150.0)
+    holes[whites] = 0.0
+    w_s = np.maximum(ms, holes)
+    w_s = cv2.GaussianBlur(w_s, (0, 0), max(1.0, 0.006 * max(sw, sh)))
+    wgt = cv2.resize(w_s, (w, h), interpolation=cv2.INTER_LINEAR) * 0.9
+    ys, xs = np.where(wgt > 0.002)
+    if ys.size == 0:
+        return
+    y0, y1, x0, x1 = int(ys.min()), int(ys.max()) + 1, int(xs.min()), int(xs.max()) + 1
+    wb = wgt[y0:y1, x0:x1]
+    region = img[y0:y1, x0:x1]
+    lab = cv2.cvtColor(np.clip(region, 0, 255) / 255.0, cv2.COLOR_RGB2LAB)   # float: L 0..100, a/b ~ -127..127
+    lab[..., 1] += da * wb
+    lab[..., 2] += db * wb
+    out = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+    np.clip(out, 0.0, 1.0, out=out)
+    sel = wb > 0.002
+    region[sel] = out[sel] * 255.0
+
+
+def _apply_skin_glow(img: np.ndarray, skin_mask: np.ndarray, strength: float) -> None:
+    """In-place on float32 RGB 0..255. Lift at strength 1.0: +4 levels on skin shadows up to +13 on the skin's
+    soft highlights (auto 65%: about +3..+8), fading out on already bright skin; zero outside the skin mask."""
+    h, w = img.shape[:2]
+    if skin_mask.shape[:2] != (h, w):
+        skin_mask = cv2.resize(skin_mask, (w, h), interpolation=cv2.INTER_LINEAR)
+    m = np.clip(skin_mask.astype(np.float32), 0.0, 1.0)
+    if float(m.max()) < 0.05:
+        return
+    # Work on a proxy for the soft (blurred) light layer; the mask edge is feathered so no outline shows
+    s = min(1.0, 1200.0 / float(max(h, w)))
+    sw, sh = max(1, int(w * s)), max(1, int(h * s))
+    Y = 0.299 * img[:, :, 0] + 0.587 * img[:, :, 1] + 0.114 * img[:, :, 2]
+    Ys = cv2.resize(Y, (sw, sh), interpolation=cv2.INTER_AREA)
+    ms = cv2.resize(m, (sw, sh), interpolation=cv2.INTER_AREA)
+    sel = ms > 0.5
+    if int(sel.sum()) < 50:
+        return
+    lo = float(np.percentile(Ys[sel], 35))           # skin mid-tone
+    hi = float(np.percentile(Ys[sel], 97))           # skin's own highlight level
+    sigma = max(1.5, 0.006 * max(sw, sh))
+    soft = cv2.GaussianBlur(Ys, (0, 0), sigma)        # soft light distribution over the face
+    t = np.clip((soft - lo) / max(hi - lo, 8.0), 0.0, 1.0)
+    t = t * t * (3.0 - 2.0 * t)                       # smooth highlight weight 0..1
+    feather = cv2.GaussianBlur(ms, (0, 0), max(1.0, sigma * 0.5))
+    lift_s = (4.0 + 9.0 * t) * feather * float(np.clip(strength, 0.0, 1.0))
+    lift = cv2.resize(lift_s, (w, h), interpolation=cv2.INTER_LINEAR) * np.clip(m * 1.5, 0.0, 1.0)
+    # Highlight protection: full glow up to well-lit skin (~165), fading to none before white
+    lift *= np.clip((232.0 - Y) / 67.0, 0.0, 1.0)
+    ratio = (Y + lift) / np.maximum(Y, 1.0)
+    img *= ratio[:, :, None]
+    np.clip(img, 0.0, 255.0, out=img)
 
 def render_preview(filepath: str, params: EditParameters, max_dim: int = 1200) -> np.ndarray:
     """
@@ -625,6 +693,7 @@ def is_default_params(params: Optional[EditParameters]) -> bool:
     try:
         return (
             abs(getattr(params, 'exposure', 0.0) or 0.0) < 0.01 and
+            abs(getattr(params, 'subject_exposure', 0.0) or 0.0) < 0.01 and
             abs(getattr(params, 'temperature', 0.0) or 0.0) < 0.1 and
             abs(getattr(params, 'tint', 0.0) or 0.0) < 0.1 and
             abs(getattr(params, 'contrast', 0.0) or 0.0) < 0.1 and
@@ -638,7 +707,10 @@ def is_default_params(params: Optional[EditParameters]) -> bool:
             float(getattr(params, 'skin_smoothing', 0.0) or 0.0) < 1.0 and
             float(getattr(params, 'auto_blemish', 0.0) or 0.0) < 1.0 and
             float(getattr(params, 'dodge_burn', 0.0) or 0.0) < 1.0 and
-            len(getattr(params, 'heal_spots', []) or []) == 0
+            float(getattr(params, 'skin_glow', 0.0) or 0.0) < 1.0 and
+            len(getattr(params, 'heal_spots', []) or []) == 0 and
+            not (resolve_retouch_params(params) or {}).get("enabled", False) and
+            wb_effective_gains(getattr(params, 'auto_wb', None)) is None
         )
     except Exception:
         return False
@@ -667,7 +739,7 @@ def export_photo(
 
         # Direct resize without filter chain
         full_rgb = load_image(source_path, max_dim=max_resolution)
-        _write_jpeg(target_path, full_rgb, jpeg_quality)
+        _write_jpeg(target_path, full_rgb, jpeg_quality, source_path)
         return
 
     # 2. Photos with edits: apply accelerated pipeline
@@ -675,14 +747,110 @@ def export_photo(
     edited_rgb = apply_edit_pipeline(full_rgb, params)
     del full_rgb
 
-    _write_jpeg(target_path, edited_rgb, jpeg_quality)
+    _write_jpeg(target_path, edited_rgb, jpeg_quality, source_path)
 
 
-def _write_jpeg(target_path: str, rgb: np.ndarray, jpeg_quality: int) -> None:
-    """Hardware-accelerated SIMD JPEG write. Encodes in memory and writes via numpy so
-    Windows paths with spaces or non-ASCII characters work (cv2.imwrite fails silently there)."""
+def _source_metadata(source_path: Optional[str], width: int, height: int) -> Tuple[Optional[bytes], Optional[bytes]]:
+    """EXIF (orientation reset, new size, no stale thumbnail) and ICC profile of the source image."""
+    if not source_path:
+        return None, None
+    if is_raw_format(source_path):
+        return _raw_exif(source_path, width, height), None
+    exif_bytes, icc = None, None
+    try:
+        with Image.open(source_path) as src:
+            icc = src.info.get("icc_profile")
+            raw_exif = src.info.get("exif")
+        if raw_exif:
+            import piexif
+            exif = piexif.load(raw_exif)
+            exif["0th"][piexif.ImageIFD.Orientation] = 1  # pixels are already upright
+            exif["0th"][piexif.ImageIFD.Software] = b"Ai PhotoFlow"
+            exif["Exif"][piexif.ExifIFD.PixelXDimension] = int(width)
+            exif["Exif"][piexif.ExifIFD.PixelYDimension] = int(height)
+            exif["1st"] = {}
+            exif["thumbnail"] = None
+            exif.get("Exif", {}).pop(piexif.ExifIFD.MakerNote, None)  # often too large / camera-specific
+            exif_bytes = piexif.dump(exif)
+    except Exception:
+        exif_bytes = None
+    return exif_bytes, icc
+
+
+def _raw_exif(source_path: str, width: int, height: int) -> Optional[bytes]:
+    """Camera EXIF for photos developed from RAW: read from the RAW itself (TIFF-based NEF/ARW/CR2/DNG/ORF/
+    PEF ...) or from its embedded camera JPEG (CR3, RAF ...). Only portable tags are copied: camera, lens,
+    date, exposure, ISO, GPS, author / copyright. RAW-internal structure tags are dropped."""
+    import piexif
+    data = None
+    try:
+        data = piexif.load(source_path)
+    except Exception:
+        try:
+            import rawpy
+            with rawpy.imread(source_path) as raw:
+                thumb = raw.extract_thumb()
+            if thumb.format == rawpy.ThumbFormat.JPEG:
+                with Image.open(io.BytesIO(thumb.data)) as im:
+                    if im.info.get("exif"):
+                        data = piexif.load(im.info["exif"])
+        except Exception:
+            data = None
+    if not data:
+        return None
+    I = piexif.ImageIFD
+    keep_0th = (I.Make, I.Model, I.DateTime, I.Artist, I.Copyright, I.ImageDescription, I.XResolution, I.YResolution, I.ResolutionUnit)
+    zeroth = {k: v for k, v in (data.get("0th") or {}).items() if k in keep_0th}
+    zeroth[I.Orientation] = 1                  # pixels are already upright
+    zeroth[I.Software] = b"Ai PhotoFlow"
+    exif_ifd = {k: v for k, v in (data.get("Exif") or {}).items() if k != piexif.ExifIFD.MakerNote}
+    exif_ifd[piexif.ExifIFD.PixelXDimension] = int(width)
+    exif_ifd[piexif.ExifIFD.PixelYDimension] = int(height)
+    strip = lambda d: {k: (v.rstrip(b"\x00 ") if isinstance(v, bytes) else v) for k, v in d.items()}
+    out = {"0th": strip(zeroth), "Exif": strip(exif_ifd), "GPS": data.get("GPS") or {}, "1st": {}, "thumbnail": None}
+    for attempt in range(2):
+        try:
+            return piexif.dump(out)
+        except Exception:
+            # Drop vendor tags piexif cannot serialise and retry once
+            out["Exif"] = {k: v for k, v in out["Exif"].items() if k in piexif.TAGS["Exif"]}
+            out["GPS"] = {k: v for k, v in out["GPS"].items() if k in piexif.TAGS["GPS"]}
+    return None
+
+
+def _insert_icc(jpeg: bytes, icc: bytes) -> bytes:
+    """Insert an ICC profile as APP2 ICC_PROFILE segments right after the JPEG SOI marker."""
+    chunk = 65519
+    parts = [icc[i:i + chunk] for i in range(0, len(icc), chunk)]
+    segs = b""
+    for i, part in enumerate(parts, 1):
+        payload = b"ICC_PROFILE\x00" + bytes([i, len(parts)]) + part
+        segs += b"\xff\xe2" + (len(payload) + 2).to_bytes(2, "big") + payload
+    return jpeg[:2] + segs + jpeg[2:]
+
+
+def _write_jpeg(target_path: str, rgb: np.ndarray, jpeg_quality: int, source_path: Optional[str] = None) -> None:
+    """Hardware-accelerated SIMD JPEG write that keeps the source EXIF (camera, lens, date, GPS) and
+    ICC profile. Encodes in memory and writes via numpy so Windows paths with spaces or non-ASCII
+    characters work (cv2.imwrite fails silently there)."""
     bgr = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
     ok, buf = cv2.imencode(".jpg", bgr, [cv2.IMWRITE_JPEG_QUALITY, int(jpeg_quality)])
     if not ok:
         raise IOError(f"JPEG encoding failed for {target_path}")
-    buf.tofile(target_path)
+    data = buf.tobytes()
+    exif_bytes, icc = _source_metadata(source_path, rgb.shape[1], rgb.shape[0])
+    if icc:
+        try:
+            data = _insert_icc(data, icc)
+        except Exception:
+            pass
+    if exif_bytes:
+        try:
+            import piexif
+            out = io.BytesIO()
+            piexif.insert(exif_bytes, data, out)
+            data = out.getvalue()
+        except Exception:
+            pass
+    with open(target_path, "wb") as fh:
+        fh.write(data)

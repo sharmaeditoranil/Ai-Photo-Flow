@@ -145,6 +145,12 @@ class ProofingService:
         conn.commit()
         conn.close()
 
+        # Master Hosting (photographer's own cPanel domain): previews are uploaded there after generation
+        from backend.services.hosting_sync_service import hosting_sync_service
+        master_base = hosting_sync_service.uses_master_hosting()
+        if master_base:
+            hosting_sync_service.mark_pending(gallery_uuid, master_base)
+
         # Create Background Batch Job for real-time progress bar tracking
         total = len(photos)
         job_id = BatchManager().create_job(project_id, "PROOFING_PREVIEW", total)
@@ -164,7 +170,13 @@ class ProofingService:
             "client_name": client_name,
             "total_photos": len(photos),
             "share_url": f"http://127.0.0.1:{os.environ.get('PORT', '8000')}/gallery/{gallery_uuid}",
-            "status": "PROCESSING"
+            "status": "PROCESSING",
+            "client_pin": client_pin,
+            "selected_count": 0,
+            "hosting_url": master_base,
+            "hosting_status": "PENDING" if master_base else "",
+            "hosting_error": "",
+            "hosting_uploaded": 0
         }
 
     def _generate_single_preview(
@@ -256,13 +268,35 @@ class ProofingService:
                 pct = round((completed_count / total) * 100, 1)
                 batch_mgr.update_progress(job_id, completed_count, total, fname, pct)
 
+        batch_mgr.add_log(job_id, f"All {total} proofing previews generated successfully.", "SUCCESS")
+
+        # Upload to the photographer's Master Hosting domain (if configured for this gallery)
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT hosting_url FROM client_galleries WHERE gallery_uuid = ?", (gallery_uuid,))
+        row = cursor.fetchone()
+        conn.close()
+        hosting_url = (row["hosting_url"] if row else "") or ""
+        cancelled = job_id in batch_mgr.cancel_flags and batch_mgr.cancel_flags[job_id].is_set()
+        if hosting_url and not cancelled:
+            from backend.services.hosting_sync_service import hosting_sync_service
+            batch_mgr.add_log(job_id, f"Uploading {total} previews to {hosting_url} ...")
+
+            def on_upload(n, tot, fname):
+                batch_mgr.update_progress(job_id, n, tot, f"Uploading to domain: {fname}", round(n / max(tot, 1) * 100, 1))
+
+            res = hosting_sync_service.sync_gallery(gallery_uuid, hosting_url, progress=on_upload)
+            if res.get("success"):
+                batch_mgr.add_log(job_id, f"Gallery is live on {hosting_url}", "SUCCESS")
+            else:
+                batch_mgr.add_log(job_id, f"Domain upload failed: {res.get('error')}", "ERROR")
+
         # Mark job completed
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute("UPDATE batch_jobs SET status = 'COMPLETED', progress_pct = 100.0, finished_at = CURRENT_TIMESTAMP WHERE id = ?", (job_id,))
         conn.commit()
         conn.close()
-        batch_mgr.add_log(job_id, f"All {total} proofing previews generated successfully.", "SUCCESS")
 
     def ensure_single_preview(self, gallery_uuid: str, photo_id: int) -> Optional[str]:
         """On-demand preview fallback guaranteeing zero broken images."""
@@ -449,8 +483,26 @@ class ProofingService:
             "message": "Selection successfully submitted to studio!"
         }
 
+    def _pull_hosted_selections(self, project_id: Optional[int] = None, gallery_uuid: Optional[str] = None):
+        """Best-effort refresh of client selections from galleries that are live on the Master Hosting."""
+        from backend.services.hosting_sync_service import hosting_sync_service
+        conn = get_connection()
+        cursor = conn.cursor()
+        if gallery_uuid:
+            cursor.execute("SELECT gallery_uuid FROM client_galleries WHERE gallery_uuid = ? AND hosting_status IN ('ONLINE', 'EXPIRED')", (gallery_uuid,))
+        else:
+            cursor.execute("SELECT gallery_uuid FROM client_galleries WHERE project_id = ? AND hosting_status IN ('ONLINE', 'EXPIRED')", (project_id,))
+        uuids = [r["gallery_uuid"] for r in cursor.fetchall()]
+        conn.close()
+        for u in uuids:
+            try:
+                hosting_sync_service.pull_selections(u)
+            except Exception:
+                pass
+
     def list_project_galleries(self, project_id: int) -> List[Dict[str, Any]]:
         """Lists all client galleries created for a specific project."""
+        self._pull_hosted_selections(project_id=project_id)
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute("""
@@ -477,6 +529,9 @@ class ProofingService:
 
         target_dir = os.path.join(destination_folder, "Client_Album_Selection")
         os.makedirs(target_dir, exist_ok=True)
+
+        # Selections made on the Master Hosting domain live on the server; fetch them first
+        self._pull_hosted_selections(project_id=project_id, gallery_uuid=gallery_uuid)
 
         conn = get_connection()
         cursor = conn.cursor()

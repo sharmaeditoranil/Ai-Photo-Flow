@@ -47,3 +47,7 @@ cache/
 *.log
 sample_wedding_photos/
 sample_wedding_export/
+
+# License server secrets & packages (private key must never be committed)
+dist-server/
+license_server/config.php

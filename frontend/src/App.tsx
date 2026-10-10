@@ -12,9 +12,9 @@ import { ExportModal } from './components/ExportModal';
 import { BatchLogsModal } from './components/BatchLogsModal';
 import { ShortcutsModal } from './components/ShortcutsModal';
 import { SettingsModal } from './components/SettingsModal';
+import { ProfileModal } from './components/ProfileModal';
 import { PricingModal } from './components/PricingModal';
 import { LightboxModal } from './components/LightboxModal';
-import { AdminHubModal } from './components/AdminHubModal';
 import { ShareProofingModal } from './components/ShareProofingModal';
 import { BatchProgressModal } from './components/BatchProgressModal';
 
@@ -55,8 +55,16 @@ export const App: React.FC = () => {
   const [isShortcutsOpen, setIsShortcutsOpen] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
   const [isPricingOpen, setIsPricingOpen] = useState<boolean>(false);
-  const [isAdminHubOpen, setIsAdminHubOpen] = useState<boolean>(false);
+  const [isProfileOpen, setIsProfileOpen] = useState<boolean>(false);
   const [selectedStylePreset, setSelectedStylePreset] = useState<string>('Pure Light (No Color Tone)');
+  // AI Skin Retouch preset applied by Auto Edit (remembered on this computer)
+  const [autoEditRetouchPreset, setAutoEditRetouchPresetState] = useState<string>(() => {
+    try { return localStorage.getItem('photoflow.retouchPreset') || 'Natural'; } catch { return 'Natural'; }
+  });
+  const setAutoEditRetouchPreset = (name: string) => {
+    setAutoEditRetouchPresetState(name);
+    try { localStorage.setItem('photoflow.retouchPreset', name); } catch { /* storage unavailable */ }
+  };
 
 
 
@@ -71,6 +79,7 @@ export const App: React.FC = () => {
       console.error('Error fetching license status:', err);
     }
   };
+
 
   // 1. Initial Load: Fetch Projects
   const loadProjects = async () => {
@@ -215,7 +224,7 @@ export const App: React.FC = () => {
 
   const handleAutoEditSingle = async (photoId: number, presetName = 'Natural Wedding') => {
     try {
-      const res = await api.autoEditSingle(photoId, presetName);
+      const res = await api.autoEditSingle(photoId, presetName, autoEditRetouchPreset);
       setPhotos(prev => prev.map(p => p.id === photoId ? { ...p, edit_params: res.edit_params, is_edited: 1 } : p));
       if (selectedPhoto?.id === photoId) {
         setSelectedPhoto(prev => prev ? { ...prev, edit_params: res.edit_params, is_edited: 1 } : null);
@@ -227,6 +236,15 @@ export const App: React.FC = () => {
   };
 
   // 4. Batch Triggers
+  // A 403 means the license/trial is not active: explain why and open the plans screen
+  const showActionError = (action: string, err: any) => {
+    alert(`${action} could not start:\n\n${err?.message || 'Unknown error'}`);
+    if (err?.status === 403) {
+      loadLicense();
+      setIsPricingOpen(true);
+    }
+  };
+
   const handleStartCull = async () => {
     if (!currentProject) return;
     try {
@@ -235,7 +253,7 @@ export const App: React.FC = () => {
       setActiveJob(job);
       setIsBatchProgressOpen(true);
     } catch (err: any) {
-      alert(`Could not start AI Culling: ${err.message}`);
+      showActionError('AI Culling', err);
     }
   };
 
@@ -243,12 +261,12 @@ export const App: React.FC = () => {
     if (!currentProject) return;
     try {
       const targetIds = selectedPhotoIds.length > 0 ? selectedPhotoIds : undefined;
-      const { job_id } = await api.startAutoEdit(currentProject.id, selectedStylePreset, targetIds);
+      const { job_id } = await api.startAutoEdit(currentProject.id, selectedStylePreset, targetIds, autoEditRetouchPreset);
       const job = await api.getJob(job_id);
       setActiveJob(job);
       setIsBatchProgressOpen(true);
     } catch (err: any) {
-      alert(`Could not start Auto Edit: ${err.message}`);
+      showActionError('Auto Edit', err);
     }
   };
 
@@ -261,7 +279,7 @@ export const App: React.FC = () => {
       setActiveJob(job);
       return job_id;
     } catch (err: any) {
-      alert(`Could not start Export: ${err.message}`);
+      showActionError('Export', err);
       throw err;
     }
   };
@@ -320,18 +338,8 @@ export const App: React.FC = () => {
         return;
       }
 
-      // Secret Admin Hub Shortcut for Owner (Anil Sharma):
-      // Completely hidden from normal users.
-      // Accessible via: Cmd + Shift + A (or Ctrl + Shift + A) or Cmd + Option + A or F12
       const isCmdOrCtrl = e.metaKey || e.ctrlKey;
       const k = e.key ? e.key.toLowerCase() : '';
-      const isA = k === 'a' || e.code === 'KeyA';
-
-      if ((isCmdOrCtrl && (e.shiftKey || e.altKey) && isA) || e.key === 'F12') {
-        e.preventDefault();
-        setIsAdminHubOpen(true);
-        return;
-      }
 
       if (e.key === 'F10' || (isCmdOrCtrl && e.altKey && (k === 's' || e.code === 'KeyS'))) {
         e.preventDefault();
@@ -364,8 +372,9 @@ export const App: React.FC = () => {
         e.preventDefault();
         handleUpdateSelection(selectedPhoto.id, 'BEST');
       } else if (key === 'P') {
+        // "Pick" now means AI Best (the separate Selected category was removed)
         e.preventDefault();
-        handleUpdateSelection(selectedPhoto.id, 'SELECTED');
+        handleUpdateSelection(selectedPhoto.id, 'BEST');
       } else if (key === 'R') {
         e.preventDefault();
         handleUpdateSelection(selectedPhoto.id, 'REVIEW');
@@ -434,6 +443,7 @@ export const App: React.FC = () => {
         projects={projects}
         license={license}
         onOpenPricing={() => setIsPricingOpen(true)}
+        onOpenProfile={() => setIsProfileOpen(true)}
         onSelectProject={(id) => loadProjectDetails(id)}
         onOpenImport={() => setIsImportOpen(true)}
         onOpenExport={() => setIsExportOpen(true)}
@@ -442,7 +452,6 @@ export const App: React.FC = () => {
         onOpenLogs={() => setIsLogsOpen(true)}
         onOpenShortcuts={() => setIsShortcutsOpen(true)}
         onOpenSettings={() => setIsSettingsOpen(true)}
-        onOpenAdminHub={() => setIsAdminHubOpen(true)}
         onStartCull={handleStartCull}
         onStartAutoEdit={handleStartAutoEdit}
         onDeleteProject={handleDeleteProject}
@@ -533,6 +542,8 @@ export const App: React.FC = () => {
           photo={selectedPhoto}
           selectedStylePreset={selectedStylePreset}
           onSelectStylePreset={setSelectedStylePreset}
+          autoEditRetouchPreset={autoEditRetouchPreset}
+          onSelectAutoEditRetouchPreset={setAutoEditRetouchPreset}
           onUpdateEdits={handleUpdateEdits}
           onResetEdits={handleResetEdits}
           onAutoEditSingle={handleAutoEditSingle}
@@ -606,16 +617,17 @@ export const App: React.FC = () => {
         onClose={() => setIsSettingsOpen(false)}
       />
 
-      <AdminHubModal
-        isOpen={isAdminHubOpen}
-        onClose={() => setIsAdminHubOpen(false)}
+      <ProfileModal
+        isOpen={isProfileOpen}
+        onClose={() => setIsProfileOpen(false)}
+        onOpenPricing={() => setIsPricingOpen(true)}
+        onLicenseUpdated={(lic) => setLicense(lic)}
       />
 
       <PricingModal
         isOpen={isPricingOpen}
         onClose={() => setIsPricingOpen(false)}
         onLicenseUpdated={(lic) => setLicense(lic)}
-        onOpenAdminSettings={() => setIsAdminHubOpen(true)}
       />
 
       <LightboxModal

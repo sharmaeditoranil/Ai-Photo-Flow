@@ -4,13 +4,15 @@ Desktop AI photo culling and batch editing service for professional wedding phot
 """
 import os
 import json
+import hmac
+import time
 import io
 import cv2
 import numpy as np
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException, Query, Body, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse
+from fastapi.responses import FileResponse, StreamingResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel
 from PIL import Image
 
@@ -21,14 +23,17 @@ from backend.services.image_service import (
     generate_thumbnail, generate_edited_thumbnail, remove_edited_thumbnail,
     render_preview, load_image, CACHE_DIR
 )
+from backend.retouch import retouch_image, resolve_params as resolve_retouch_params, list_presets as list_retouch_presets, build_preset as build_retouch_preset, DEFAULT_RETOUCH
 from backend.core.interfaces import EditParameters
 from backend.core.photoshop_integration import PhotoshopUXPIntegration
 from backend.core.editing_model import IndianWeddingEditingModel
-from backend.services.license_service import LicenseService
+from backend.services.license_service import get_license_service
 from backend.services.proofing_service import proofing_service, PROOFING_CACHE_DIR
 from backend.services.tunnel_service import tunnel_service
+from backend.services.hosting_sync_service import hosting_sync_service, normalize_master_url
 
 app = FastAPI(title="Ai PhotoFlow Core API", version="1.0.0")
+
 
 # Enable CORS for frontend desktop client
 app.add_middleware(
@@ -43,7 +48,7 @@ batch_manager = BatchManager()
 culling_service = CullingService()
 photoshop_bridge = PhotoshopUXPIntegration()
 editing_model = IndianWeddingEditingModel()
-license_service = LicenseService()
+license_service = get_license_service()
 
 @app.on_event("startup")
 def on_app_startup():
@@ -76,6 +81,7 @@ class StarRatingRequest(BaseModel):
 
 class EditParametersRequest(BaseModel):
     exposure: float = 0.0
+    subject_exposure: float = 0.0
     temperature: float = 0.0
     tint: float = 0.0
     contrast: float = 0.0
@@ -92,11 +98,16 @@ class EditParametersRequest(BaseModel):
     auto_blemish: float = 0.0
     skin_smoothing: float = 0.0
     dodge_burn: float = 0.0
+    heal_opacity: float = 100.0
+    heal_face_preset: str = "AUTO"
     heal_spots: Optional[List[Dict[str, float]]] = []
+    retouch: Optional[Dict[str, Any]] = None
+    auto_wb: Optional[Dict[str, Any]] = None
 
 class AutoEditBatchRequest(BaseModel):
     preset_name: str = "Natural Wedding"
     photo_ids: Optional[List[int]] = None
+    retouch_preset: str = "Natural"
 
 class SettingsRequest(BaseModel):
     ai_provider: str = "local" # 'local', 'replicate', 'openai', 'gemini', 'custom'
@@ -104,11 +115,9 @@ class SettingsRequest(BaseModel):
     openai_api_key: Optional[str] = ""
     gemini_api_key: Optional[str] = ""
     custom_ai_endpoint: Optional[str] = ""
-    razorpay_key_id: Optional[str] = ""
-    razorpay_key_secret: Optional[str] = ""
-    razorpay_enabled: Optional[bool] = True
-    custom_domain_url: Optional[str] = ""
-    cloudflare_tunnel_token: Optional[str] = ""
+    # None = not sent by this screen, keep the stored value
+    custom_domain_url: Optional[str] = None
+    cloudflare_tunnel_token: Optional[str] = None
 
 class ExportRequest(BaseModel):
     output_folder: str
@@ -124,6 +133,7 @@ class BatchDeletePhotosRequest(BaseModel):
 # --- Default Edit Parameters ---
 DEFAULT_EDIT_PARAMS = {
     "exposure": 0.0,
+    "subject_exposure": 0.0,
     "temperature": 0.0,
     "tint": 0.0,
     "contrast": 0.0,
@@ -140,7 +150,9 @@ DEFAULT_EDIT_PARAMS = {
     "auto_blemish": 0.0,
     "skin_smoothing": 0.0,
     "dodge_burn": 0.0,
-    "heal_spots": []
+    "heal_spots": [],
+    "retouch": None,
+    "auto_wb": None
 }
 
 def format_edit_params(val) -> dict:
@@ -180,9 +192,6 @@ def get_settings():
             return val
         return val[:4] + "••••••••" + val[-4:]
 
-    rzp_key = rows.get("razorpay_key_id", os.environ.get("RAZORPAY_KEY_ID", ""))
-    rzp_secret = rows.get("razorpay_key_secret", os.environ.get("RAZORPAY_KEY_SECRET", ""))
-
     return {
         "ai_provider": rows.get("ai_provider", os.environ.get("AI_PROVIDER", "local")),
         "replicate_api_token": mask(rows.get("replicate_api_token", os.environ.get("REPLICATE_API_TOKEN", ""))),
@@ -192,10 +201,7 @@ def get_settings():
         "has_replicate": bool(rows.get("replicate_api_token") or os.environ.get("REPLICATE_API_TOKEN")),
         "has_openai": bool(rows.get("openai_api_key") or os.environ.get("OPENAI_API_KEY")),
         "has_gemini": bool(rows.get("gemini_api_key") or os.environ.get("GEMINI_API_KEY")),
-        "razorpay_key_id": rzp_key,
-        "razorpay_key_secret": mask(rzp_secret),
-        "razorpay_enabled": rows.get("razorpay_enabled", "1") == "1",
-        "has_razorpay": bool(rzp_key and rzp_secret)
+        "custom_domain_url": rows.get("custom_domain_url", "")
     }
 
 @app.post("/api/settings")
@@ -206,8 +212,6 @@ def save_settings(req: SettingsRequest):
     items = [
         ("ai_provider", req.ai_provider),
         ("custom_ai_endpoint", req.custom_ai_endpoint or ""),
-        ("razorpay_key_id", req.razorpay_key_id or ""),
-        ("razorpay_enabled", "1" if req.razorpay_enabled else "0")
     ]
     # Only update secret keys if non-empty and not masked
     if req.replicate_api_token and "••••" not in req.replicate_api_token:
@@ -219,9 +223,10 @@ def save_settings(req: SettingsRequest):
     if req.gemini_api_key and "••••" not in req.gemini_api_key:
         items.append(("gemini_api_key", req.gemini_api_key))
         os.environ["GEMINI_API_KEY"] = req.gemini_api_key
-    if req.razorpay_key_secret and "••••" not in req.razorpay_key_secret:
-        items.append(("razorpay_key_secret", req.razorpay_key_secret))
-        os.environ["RAZORPAY_KEY_SECRET"] = req.razorpay_key_secret
+    if req.custom_domain_url is not None:
+        items.append(("custom_domain_url", normalize_master_url(req.custom_domain_url)))
+    if req.cloudflare_tunnel_token is not None:
+        items.append(("cloudflare_tunnel_token", req.cloudflare_tunnel_token.strip()))
 
     for k, v in items:
         cursor.execute("INSERT OR REPLACE INTO app_settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP)", (k, v))
@@ -284,7 +289,7 @@ def get_project_details(project_id: int):
     cursor.execute("""
     SELECT
         COUNT(*) as total,
-        COUNT(DISTINCT (CASE WHEN (user_selection = 'BEST' OR (user_selection = 'UNRATED' AND ai_recommendation = 'BEST')) THEN (CASE WHEN duplicate_group_id IS NOT NULL THEN duplicate_group_id ELSE id END) ELSE NULL END)) as best_count,
+        COUNT(DISTINCT (CASE WHEN (user_selection IN ('BEST', 'SELECTED') OR (user_selection = 'UNRATED' AND ai_recommendation IN ('BEST', 'SELECTED'))) THEN (CASE WHEN duplicate_group_id IS NOT NULL THEN duplicate_group_id ELSE id END) ELSE NULL END)) as best_count,
         SUM(CASE WHEN (user_selection = 'SELECTED' OR (user_selection = 'UNRATED' AND ai_recommendation = 'SELECTED')) THEN 1 ELSE 0 END) as selected_count,
         SUM(CASE WHEN (user_selection = 'REVIEW' OR (user_selection = 'UNRATED' AND ai_recommendation = 'REVIEW')) THEN 1 ELSE 0 END) as review_count,
         SUM(CASE WHEN (user_selection = 'REJECT' OR (user_selection = 'UNRATED' AND ai_recommendation = 'REJECT')) THEN 1 ELSE 0 END) as reject_count,
@@ -330,7 +335,7 @@ def list_photos(
     if category == "BEST":
         # Strictly show ONLY the winning best photo per duplicate/burst group (user requirement)
         query += """ AND (
-            (user_selection = 'BEST' OR (user_selection = 'UNRATED' AND ai_recommendation = 'BEST'))
+            (user_selection IN ('BEST', 'SELECTED') OR (user_selection = 'UNRATED' AND ai_recommendation IN ('BEST', 'SELECTED')))
             AND (
                 duplicate_group_id IS NULL 
                 OR id = (
@@ -664,7 +669,7 @@ def reset_photo_edits(photo_id: int):
     return {"status": "ok", "photo_id": photo_id, "message": "Edits reset to original"}
 
 @app.post("/api/photos/{photo_id}/auto-edit")
-def auto_edit_single(photo_id: int, preset_name: str = Query("Natural Wedding")):
+def auto_edit_single(photo_id: int, preset_name: str = Query("Natural Wedding"), retouch_preset: str = Query("Natural")):
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT file_path, project_id, scene_category, edit_params FROM photos WHERE id = ?", (photo_id,))
@@ -674,7 +679,7 @@ def auto_edit_single(photo_id: int, preset_name: str = Query("Natural Wedding"))
         raise HTTPException(status_code=404, detail="Photo not found")
 
     cv_img = load_image(row["file_path"], max_dim=800)
-    params = editing_model.calculate_corrections(cv_img, preset_name=preset_name, scene_group=row["scene_category"])
+    params = editing_model.calculate_corrections(cv_img, preset_name=preset_name, scene_group=row["scene_category"], retouch_preset=retouch_preset)
 
     # Preserve existing manual heal spots if present
     if row["edit_params"]:
@@ -770,6 +775,46 @@ def get_photo_preview(photo_id: int):
     return Response(content=buffer.tobytes(), media_type="image/jpeg")
 
 
+# --- AI Skin Retouch ---
+@app.get("/api/retouch/presets")
+def get_retouch_presets():
+    """Built-in AI Skin Retouch presets (Heal, Mattifier, Skin Mask, Skin Details, Imperfections, Skin Tone)."""
+    return {"presets": list_retouch_presets(), "defaults": DEFAULT_RETOUCH}
+
+@app.get("/api/photos/{photo_id}/retouch-mask")
+def get_retouch_mask(photo_id: int, kind: str = Query("skin")):
+    """Grayscale PNG of the skin / heal / shine mask for the 'Show mask' overlay."""
+    if kind not in ("skin", "heal", "shine"):
+        raise HTTPException(status_code=400, detail="kind must be skin, heal or shine")
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT file_path, edit_params FROM photos WHERE id = ?", (photo_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    params = EditParameters.from_dict(json.loads(row["edit_params"]) if row["edit_params"] else {})
+    rt = resolve_retouch_params(params) or build_retouch_preset("Natural")
+    rt = dict(rt)
+    rt["enabled"] = True
+    rgb = load_image(row["file_path"], max_dim=1600)
+    _, res = retouch_image(rgb, rt, want_masks=True)
+    mask = {"skin": res.skin_mask, "heal": res.heal_mask, "shine": res.shine_mask}[kind]
+    if mask is None:
+        mask = np.zeros(rgb.shape[:2], np.float32)
+    if kind == "heal" and res.heal_mask is not None:
+        mask = np.clip(mask * 3.0, 0.0, 1.0)
+    ok, buf = cv2.imencode(".png", np.clip(mask * 255.0, 0, 255).astype(np.uint8))
+    if not ok:
+        raise HTTPException(status_code=500, detail="Failed to encode mask")
+    return Response(
+        content=buf.tobytes(), media_type="image/png",
+        headers={"Cache-Control": "no-cache", "X-Faces": str(res.faces), "X-Spots": str(res.spots),
+                 "Access-Control-Expose-Headers": "X-Faces, X-Spots"}
+    )
+
+
 # --- Batch Processing Operations ---
 @app.post("/api/projects/{project_id}/cull")
 def start_culling(project_id: int):
@@ -788,7 +833,10 @@ def recluster_project(project_id: int):
 
 @app.post("/api/projects/{project_id}/auto-edit")
 def start_auto_edit(project_id: int, req: AutoEditBatchRequest):
-    job_id = batch_manager.start_auto_edit_job(project_id, preset_name=req.preset_name, photo_ids=req.photo_ids)
+    allowed, msg = license_service.verify_operational_permission("AUTO_EDIT")
+    if not allowed:
+        raise HTTPException(status_code=403, detail=msg)
+    job_id = batch_manager.start_auto_edit_job(project_id, preset_name=req.preset_name, photo_ids=req.photo_ids, retouch_preset=req.retouch_preset)
     return {"job_id": job_id, "status": "started"}
 
 @app.post("/api/projects/{project_id}/export")
@@ -852,7 +900,8 @@ def open_system_folder(req: OpenFolderRequest):
 
 
 # =========================================================================
-# Licensing, Coupon Discount & Admin Free Access Endpoints
+# Licensing & payments: everything is decided by the online License Server.
+# This app never holds a payment secret, coupon list or license-signing key.
 # =========================================================================
 
 class VerifyCouponRequest(BaseModel):
@@ -866,256 +915,72 @@ class ActivateLicenseRequest(BaseModel):
     user_name: Optional[str] = ""
     user_email: Optional[str] = ""
 
-class AdminGrantFreeRequest(BaseModel):
-    admin_pin: str
-    plan_type: str = "VIP_LIFETIME"
-    client_name: Optional[str] = ""
+class CreateOrderRequest(BaseModel):
+    plan_id: str
+    billing_cycle: str = "yearly"
+    customer_name: str = ""
+    customer_email: str = ""
+    customer_phone: Optional[str] = ""
+    coupon_code: Optional[str] = None
+    currency: str = "INR"
 
-class AdminCreateCouponRequest(BaseModel):
-    admin_pin: str
-    code: str
-    discount_percent: float
-    notes: Optional[str] = ""
-
-class AdminGenerateKeyRequest(BaseModel):
-    admin_pin: str
-    plan_type: str = "PRO"
-    days: int = 365
-    client_name: Optional[str] = ""
+class VerifyPaymentRequest(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
 
 @app.get("/api/license/status")
 def get_license_status():
     return license_service.get_license_status()
 
+@app.post("/api/license/refresh")
+def refresh_license():
+    license_service.refresh()
+    picked = license_service.check_pending_order()
+    return picked or license_service.get_license_status()
+
+@app.get("/api/license/profile")
+def get_license_profile():
+    return license_service.get_profile()
+
+@app.get("/api/license/plans")
+def get_license_plans():
+    return license_service.get_plans()
+
 @app.post("/api/license/verify-coupon")
 def verify_coupon(req: VerifyCouponRequest):
-    res = license_service.verify_coupon(
-        code=req.code,
-        plan_id=req.plan_id,
-        billing_cycle=req.billing_cycle,
-        currency=req.currency
-    )
-    return res
+    return license_service.verify_coupon(req.code, req.plan_id, req.billing_cycle, req.currency)
 
 @app.post("/api/license/activate")
 def activate_license(req: ActivateLicenseRequest):
-    success, msg, data = license_service.activate_key(
-        key=req.license_key,
-        user_name=req.user_name or "",
-        user_email=req.user_email or ""
-    )
+    success, msg, data = license_service.activate_key(req.license_key, req.user_name or "", req.user_email or "")
     if not success:
         raise HTTPException(status_code=400, detail=msg)
     return {"message": msg, "license": data}
 
-@app.post("/api/license/admin/grant-free")
-def admin_grant_free(req: AdminGrantFreeRequest):
-    success, msg, data = license_service.admin_grant_free_access(
-        admin_pin=req.admin_pin,
-        plan_type=req.plan_type,
-        client_name=req.client_name or ""
-    )
+@app.post("/api/license/deactivate")
+def deactivate_license():
+    success, msg = license_service.deactivate()
     if not success:
-        raise HTTPException(status_code=403, detail=msg)
-    return {"message": msg, "license": data}
-
-@app.post("/api/license/admin/create-coupon")
-def admin_create_coupon(req: AdminCreateCouponRequest):
-    success, msg = license_service.admin_create_coupon(
-        admin_pin=req.admin_pin,
-        code=req.code,
-        discount_pct=req.discount_percent,
-        notes=req.notes or ""
-    )
-    if not success:
-        raise HTTPException(status_code=403, detail=msg)
-    return {"message": msg}
-
-@app.post("/api/license/admin/generate-key")
-def admin_generate_key(req: AdminGenerateKeyRequest):
-    success, msg, key = license_service.admin_generate_key(
-        admin_pin=req.admin_pin,
-        plan_type=req.plan_type,
-        days=req.days,
-        client_name=req.client_name or ""
-    )
-    if not success:
-        raise HTTPException(status_code=403, detail=msg)
-    return {"message": msg, "license_key": key}
-
-# =========================================================================
-# Razorpay Payment Gateway Endpoints
-# =========================================================================
-from backend.services.payment_service import PaymentService
-
-payment_service = PaymentService()
-
-class CreateRazorpayOrderRequest(BaseModel):
-    plan_id: str = "PRO"
-    billing_cycle: str = "yearly"
-    customer_name: Optional[str] = ""
-    customer_email: Optional[str] = ""
-    coupon_code: Optional[str] = None
-    currency: str = "INR"
-
-class VerifyRazorpayPaymentRequest(BaseModel):
-    order_id: str
-    payment_id: str
-    signature: Optional[str] = None
-    client_name: Optional[str] = ""
-    client_email: Optional[str] = ""
-
-@app.get("/api/payment/config")
-def get_payment_config():
-    return payment_service.get_razorpay_config()
+        raise HTTPException(status_code=400, detail=msg)
+    return {"message": msg, "license": license_service.get_license_status()}
 
 @app.post("/api/payment/create-order")
-def create_payment_order(req: CreateRazorpayOrderRequest):
+def create_payment_order(req: CreateOrderRequest):
+    from backend.services.license_service import LicenseServerError
     try:
-        order = payment_service.create_order(
-            plan_id=req.plan_id,
-            billing_cycle=req.billing_cycle,
-            customer_name=req.customer_name or "",
-            customer_email=req.customer_email or "",
-            coupon_code=req.coupon_code,
-            currency=req.currency
-        )
-        return order
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create payment order: {str(e)}")
+        return license_service.create_order(req.plan_id, req.billing_cycle, req.customer_name, req.customer_email,
+                                            req.customer_phone or "", req.coupon_code, req.currency)
+    except LicenseServerError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 @app.post("/api/payment/verify-payment")
-def verify_payment_order(req: VerifyRazorpayPaymentRequest):
-    success, msg, license_data = payment_service.verify_payment(
-        order_id=req.order_id,
-        payment_id=req.payment_id,
-        signature=req.signature,
-        client_name=req.client_name or "",
-        client_email=req.client_email or ""
-    )
+def verify_payment_order(req: VerifyPaymentRequest):
+    success, msg, data = license_service.verify_payment(req.razorpay_order_id, req.razorpay_payment_id, req.razorpay_signature)
     if not success:
         raise HTTPException(status_code=400, detail=msg)
-# -------------------------------------------------------------
-# Admin & Affiliate Marketing Management Endpoints
-# -------------------------------------------------------------
-from backend.services.admin_service import AdminService
-admin_service = AdminService()
+    return {"message": msg, "license": data}
 
-class CreateAgentRequest(BaseModel):
-    name: str
-    phone: str
-    email: Optional[str] = ""
-    referral_code: Optional[str] = ""
-    discount_percent: Optional[float] = 15.0
-    commission_percent: Optional[float] = 20.0
-    payout_upi: Optional[str] = ""
-    payout_bank_details: Optional[str] = ""
-    notes: Optional[str] = ""
-
-class UpdateAgentRequest(BaseModel):
-    name: Optional[str] = None
-    phone: Optional[str] = None
-    email: Optional[str] = None
-    discount_percent: Optional[float] = None
-    commission_percent: Optional[float] = None
-    payout_upi: Optional[str] = None
-    payout_bank_details: Optional[str] = None
-    status: Optional[str] = None
-    notes: Optional[str] = None
-
-class PayCommissionRequest(BaseModel):
-    payout_ref: str
-    notes: Optional[str] = ""
-
-class RecordManualSaleRequest(BaseModel):
-    referral_code: str
-    customer_name: str
-    customer_email: Optional[str] = ""
-    customer_phone: Optional[str] = ""
-    plan_name: str
-    sale_amount: float
-    billing_cycle: Optional[str] = "yearly"
-
-class IssueManualLicenseRequest(BaseModel):
-    user_name: str
-    user_email: str
-    user_phone: Optional[str] = ""
-    plan_name: str
-    days: Optional[int] = 365
-    referral_code: Optional[str] = ""
-    notes: Optional[str] = ""
-
-@app.get("/api/admin/overview")
-def get_admin_overview():
-    return admin_service.get_overview_stats()
-
-@app.get("/api/admin/agents")
-def list_affiliate_agents():
-    return admin_service.list_agents()
-
-@app.post("/api/admin/agents")
-def create_affiliate_agent(req: CreateAgentRequest):
-    success, msg, data = admin_service.create_agent(req.dict())
-    if not success:
-        raise HTTPException(status_code=400, detail=msg)
-    return {"success": True, "message": msg, "agent": data}
-
-@app.put("/api/admin/agents/{agent_id}")
-def update_affiliate_agent(agent_id: int, req: UpdateAgentRequest):
-    success, msg = admin_service.update_agent(agent_id, req.dict(exclude_unset=True))
-    if not success:
-        raise HTTPException(status_code=400, detail=msg)
-    return {"success": True, "message": msg}
-
-@app.delete("/api/admin/agents/{agent_id}")
-def delete_affiliate_agent(agent_id: int):
-    success, msg = admin_service.delete_agent(agent_id)
-    return {"success": True, "message": msg}
-
-@app.get("/api/admin/referral-sales")
-def list_referral_sales():
-    return admin_service.list_referral_sales()
-
-@app.post("/api/admin/referral-sales")
-def record_manual_referral_sale(req: RecordManualSaleRequest):
-    sale_id = admin_service.record_referral_sale(
-        referral_code=req.referral_code,
-        customer_name=req.customer_name,
-        customer_email=req.customer_email or "",
-        customer_phone=req.customer_phone or "",
-        plan_name=req.plan_name,
-        sale_amount=req.sale_amount,
-        billing_cycle=req.billing_cycle or "yearly"
-    )
-    if not sale_id:
-        raise HTTPException(status_code=400, detail="Invalid referral code or inactive agent")
-    return {"success": True, "sale_id": sale_id, "message": "Sale recorded successfully!"}
-
-@app.post("/api/admin/commissions/{sale_id}/pay")
-def pay_commission(sale_id: int, req: PayCommissionRequest):
-    success, msg = admin_service.mark_commission_paid(sale_id, req.payout_ref, req.notes or "")
-    if not success:
-        raise HTTPException(status_code=400, detail=msg)
-    return {"success": True, "message": msg}
-
-@app.get("/api/admin/users")
-def list_admin_users():
-    return admin_service.list_users()
-
-@app.post("/api/admin/users/issue-license")
-def issue_user_license(req: IssueManualLicenseRequest):
-    success, msg, data = admin_service.issue_manual_license(
-        user_name=req.user_name,
-        user_email=req.user_email,
-        user_phone=req.user_phone or "",
-        plan_name=req.plan_name,
-        days=req.days or 365,
-        referral_code=req.referral_code or "",
-        notes=req.notes or ""
-    )
-    if not success:
-        raise HTTPException(status_code=400, detail=msg)
-    return {"success": True, "message": msg, "license": data}
 
 
 # --- Client Proofing & Online Selection Endpoints ---
@@ -1248,10 +1113,29 @@ def export_standalone_web_gallery(req: ExportStandaloneGalleryRequest):
         raise HTTPException(status_code=400, detail=str(e))
 
 
+# --- Master Hosting (photographer's cPanel domain) ---
+class HostingCheckRequest(BaseModel):
+    url: Optional[str] = None
+
+@app.post("/api/proofing/hosting/check")
+def check_master_hosting(req: HostingCheckRequest):
+    return hosting_sync_service.check(req.url, use_cache=False)
+
+@app.post("/api/proofing/gallery/{gallery_uuid}/hosting-sync")
+def resync_gallery_to_hosting(gallery_uuid: str):
+    base = hosting_sync_service.get_master_url()
+    if not base:
+        raise HTTPException(status_code=400, detail="Master Hosting URL is not set")
+    hosting_sync_service.mark_pending(gallery_uuid, base)
+    hosting_sync_service.sync_gallery_async(gallery_uuid)
+    return {"status": "UPLOADING", "hosting_url": base}
+
 # --- Mobile Tunnel & Network Sharing Endpoints ---
 @app.get("/api/proofing/network-info")
 def get_network_info():
-    return tunnel_service.get_info()
+    info = tunnel_service.get_info()
+    info["master_hosting"] = hosting_sync_service.check()
+    return info
 
 @app.post("/api/proofing/tunnel/start")
 def start_public_tunnel():

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const fs = require('fs');
@@ -210,6 +210,15 @@ function createWindow() {
   });
 
   ipcMain.handle('backend:status', () => ({ ...backendStatus, port: backendPort }));
+
+  // Open web pages (license admin panel, help) in the user's real browser. HTTPS only.
+  ipcMain.handle('app:openExternal', (_e, url) => {
+    if (typeof url === 'string' && /^https:\/\//i.test(url)) {
+      shell.openExternal(url);
+      return true;
+    }
+    return false;
+  });
 
   // Sample photos folder IPC for zero-friction testing on both Windows & Mac
   ipcMain.handle('app:getSamplePhotosPath', () => {

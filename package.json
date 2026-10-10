@@ -11,7 +11,7 @@
     "dev": "concurrently -n \"BACKEND,FRONTEND\" -c \"cyan,magenta\" \"npm run start:backend\" \"npm run start:frontend\"",
     "start:desktop": "concurrently -k -n \"BACKEND,FRONTEND,ELECTRON\" -c \"cyan,magenta,yellow\" \"npm run start:backend\" \"npm run start:frontend\" \"wait-on http://localhost:5173 && electron .\"",
     "build:frontend": "npm --prefix frontend run build",
-    "build:backend": "./venv/bin/pyinstaller --noconfirm --onedir --name photoflow-backend --distpath dist-backend --add-data \"./venv/lib/python3.9/site-packages/cv2/data/haarcascade_frontalface_default.xml:cv2/data\" --add-data \"./venv/lib/python3.9/site-packages/cv2/data/haarcascade_eye.xml:cv2/data\" --add-data \"./venv/lib/python3.9/site-packages/cv2/data/haarcascade_smile.xml:cv2/data\" --add-data \"backend/templates:backend/templates\" backend_entry.py",
+    "build:backend": "./venv/bin/pyinstaller --noconfirm --onedir --name photoflow-backend --distpath dist-backend --add-data \"./venv/lib/python3.9/site-packages/cv2/data/haarcascade_frontalface_default.xml:cv2/data\" --add-data \"./venv/lib/python3.9/site-packages/cv2/data/haarcascade_eye.xml:cv2/data\" --add-data \"./venv/lib/python3.9/site-packages/cv2/data/haarcascade_smile.xml:cv2/data\" --add-data \"backend/templates:backend/templates\" --add-data \"backend/models:backend/models\" backend_entry.py",
     "build:dmg": "npm run build:frontend && npm run build:backend && electron-builder --mac",
     "build:win": "npm run build:frontend && electron-builder --win nsis --x64"
   },

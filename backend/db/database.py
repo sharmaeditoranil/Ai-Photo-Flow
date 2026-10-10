@@ -132,6 +132,43 @@ def init_db():
     )
     """)
 
+    # Face-first culling data (focus of the main face, close-up / emotion flags) for re-clustering
+    for col_sql in ("ALTER TABLE photos ADD COLUMN face_sharpness REAL DEFAULT NULL",
+                    "ALTER TABLE photos ADD COLUMN face_close_up INTEGER DEFAULT 0",
+                    "ALTER TABLE photos ADD COLUMN face_emotion INTEGER DEFAULT 0",
+                    "ALTER TABLE photos ADD COLUMN face_brightness REAL DEFAULT NULL",
+                    "ALTER TABLE photos ADD COLUMN face_sharpness_hires REAL DEFAULT NULL",
+                    "ALTER TABLE photos ADD COLUMN face_focus REAL DEFAULT NULL"):
+        try:
+            cursor.execute(col_sql)
+        except Exception:
+            pass
+
+    # The separate "Selected" culling category was removed: those photos belong to AI Best
+    try:
+        cursor.execute("UPDATE photos SET ai_recommendation = 'BEST' WHERE ai_recommendation = 'SELECTED'")
+        cursor.execute("UPDATE photos SET user_selection = 'BEST' WHERE user_selection = 'SELECTED'")
+    except Exception:
+        pass
+
+    # Payment gateway keys now live only on the online License Server; never keep secrets in the app DB
+    try:
+        cursor.execute("DELETE FROM app_settings WHERE key IN ('razorpay_key_id', 'razorpay_key_secret', 'razorpay_enabled')")
+    except Exception:
+        pass
+
+    # Master Hosting (cPanel) sync state per gallery
+    for col_sql in (
+        "ALTER TABLE client_galleries ADD COLUMN hosting_url TEXT DEFAULT ''",
+        "ALTER TABLE client_galleries ADD COLUMN hosting_status TEXT DEFAULT ''",
+        "ALTER TABLE client_galleries ADD COLUMN hosting_error TEXT DEFAULT ''",
+        "ALTER TABLE client_galleries ADD COLUMN hosting_uploaded INTEGER DEFAULT 0",
+    ):
+        try:
+            cursor.execute(col_sql)
+        except Exception:
+            pass
+
     # Client Gallery Photos Mapping Table
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS client_gallery_photos (
