@@ -165,12 +165,24 @@ class CullingService:
 
         print(f"[Photo Import Success] Project {project_id} ('{project_name}') has {total_photos} photos ({inserted_count} newly added).")
 
+        # Same photos imported again after the project was removed: its client albums (link, PIN, selections)
+        # come back to this project automatically
+        relinked = []
+        try:
+            from backend.services.hosting_sync_service import hosting_sync_service
+            relinked = hosting_sync_service.relink_albums_for_project(project_id)
+            if relinked:
+                print(f"[Photo Import] Re-attached {len(relinked)} client album(s): {', '.join(relinked)}")
+        except Exception as e:
+            print(f"[Photo Import Warning] Album re-link skipped: {e}")
+
         return {
             "project_id": project_id,
             "project_name": project_name,
             "folder_path": folder_path,
             "total_photos": total_photos,
             "newly_added": inserted_count,
+            "relinked_albums": relinked,
             "status": "Ready for Culling"
         }
 

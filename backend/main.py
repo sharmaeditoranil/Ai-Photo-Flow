@@ -308,6 +308,17 @@ def get_project_details(project_id: int):
 def delete_project(project_id: int):
     conn = get_connection()
     cursor = conn.cursor()
+    # Client albums are kept (link, PIN, selections). Remember each album photo's file name and the project
+    # folder first, so importing the same photos again re-attaches the albums automatically.
+    try:
+        cursor.execute("""UPDATE client_gallery_photos SET
+                              filename = COALESCE(NULLIF(filename, ''), (SELECT p.filename FROM photos p WHERE p.id = client_gallery_photos.photo_id)),
+                              remote_id = COALESCE(remote_id, photo_id)
+                          WHERE gallery_uuid IN (SELECT gallery_uuid FROM client_galleries WHERE project_id = ?)""", (project_id,))
+        cursor.execute("""UPDATE client_galleries SET folder_path = (SELECT folder_path FROM projects WHERE id = ?)
+                          WHERE project_id = ? AND COALESCE(folder_path, '') = ''""", (project_id, project_id))
+    except Exception:
+        pass
     cursor.execute("DELETE FROM photos WHERE project_id = ?", (project_id,))
     cursor.execute("DELETE FROM batch_jobs WHERE project_id = ?", (project_id,))
     cursor.execute("DELETE FROM projects WHERE id = ?", (project_id,))

@@ -189,6 +189,16 @@ def init_db():
     except Exception:
         pass
 
+    # Album <-> project re-linking (a project removed and imported again keeps its client albums):
+    # folder of the album's project, every album photo's file name, and the photo id used on the album server
+    for col_sql in ("ALTER TABLE client_galleries ADD COLUMN folder_path TEXT DEFAULT ''",
+                    "ALTER TABLE client_gallery_photos ADD COLUMN filename TEXT DEFAULT ''",
+                    "ALTER TABLE client_gallery_photos ADD COLUMN remote_id INTEGER DEFAULT NULL"):
+        try:
+            cursor.execute(col_sql)
+        except Exception:
+            pass
+
     # Client Gallery Photos Mapping Table
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS client_gallery_photos (
@@ -199,6 +209,16 @@ def init_db():
         PRIMARY KEY (gallery_uuid, photo_id)
     )
     """)
+
+    # Backfill the re-linking data for existing albums (only where the project / photos still exist)
+    try:
+        cursor.execute("UPDATE client_gallery_photos SET remote_id = photo_id WHERE remote_id IS NULL")
+        cursor.execute("""UPDATE client_gallery_photos SET filename = (SELECT p.filename FROM photos p WHERE p.id = client_gallery_photos.photo_id)
+                          WHERE COALESCE(filename, '') = '' AND photo_id IN (SELECT id FROM photos)""")
+        cursor.execute("""UPDATE client_galleries SET folder_path = (SELECT pr.folder_path FROM projects pr WHERE pr.id = client_galleries.project_id)
+                          WHERE COALESCE(folder_path, '') = '' AND project_id IN (SELECT id FROM projects)""")
+    except Exception:
+        pass
 
     conn.commit()
     conn.close()

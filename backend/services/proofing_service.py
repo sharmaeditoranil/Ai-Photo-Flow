@@ -125,22 +125,24 @@ class ProofingService:
         os.makedirs(gallery_dir, exist_ok=True)
 
         # Insert Gallery record immediately
+        cursor.execute("SELECT folder_path FROM projects WHERE id = ?", (project_id,))
+        _pr = cursor.fetchone()
         cursor.execute("""
         INSERT INTO client_galleries (
             project_id, gallery_uuid, title, client_name, client_pin,
-            total_photos, selected_count, status, watermark_enabled, watermark_text
-        ) VALUES (?, ?, ?, ?, ?, ?, 0, 'ACTIVE', ?, ?)
+            total_photos, selected_count, status, watermark_enabled, watermark_text, folder_path
+        ) VALUES (?, ?, ?, ?, ?, ?, 0, 'ACTIVE', ?, ?, ?)
         """, (
             project_id, gallery_uuid, title, client_name, client_pin,
-            len(photos), 1 if watermark_enabled else 0, watermark_text
+            len(photos), 1 if watermark_enabled else 0, watermark_text, (_pr["folder_path"] if _pr else "")
         ))
 
-        # Insert photo mappings immediately
+        # Insert photo mappings immediately (file name + album-server id kept for re-linking later)
         for p in photos:
             cursor.execute("""
-            INSERT OR REPLACE INTO client_gallery_photos (gallery_uuid, photo_id, client_selection, client_note)
-            VALUES (?, ?, 'UNRATED', '')
-            """, (gallery_uuid, p["id"]))
+            INSERT OR REPLACE INTO client_gallery_photos (gallery_uuid, photo_id, client_selection, client_note, filename, remote_id)
+            VALUES (?, ?, 'UNRATED', '', ?, ?)
+            """, (gallery_uuid, p["id"], p.get("filename") or "", p["id"]))
 
         conn.commit()
         conn.close()

@@ -238,8 +238,9 @@ class HostingSyncService:
                 raise RuntimeError("Gallery not found.")
             g = dict(g)
             cur.execute("""
-                SELECT p.id, p.filename FROM client_gallery_photos gp JOIN photos p ON p.id = gp.photo_id
-                WHERE gp.gallery_uuid = ? ORDER BY gp.photo_id ASC
+                SELECT p.id, p.filename, COALESCE(gp.remote_id, gp.photo_id) AS rid
+                FROM client_gallery_photos gp JOIN photos p ON p.id = gp.photo_id
+                WHERE gp.gallery_uuid = ? ORDER BY rid ASC
             """, (gallery_uuid,))
             photos = [dict(r) for r in cur.fetchall()]
             conn.close()
@@ -257,7 +258,8 @@ class HostingSyncService:
                 "watermark_enabled": False,
                 "watermark_text": g.get("watermark_text") or "",
                 "created_at": str(g.get("created_at") or ""),
-                "photos": [{"id": p["id"], "filename": p["filename"]} for p in photos],
+                # Album-server ids never change (selections are stored against them), even after re-linking
+                "photos": [{"id": p["rid"], "filename": p["filename"]} for p in photos],
             }
             status, body = _request(_api(base, "sync"), json.dumps(payload).encode("utf-8"),
                                     {"Content-Type": "application/json", **_auth_headers()})
@@ -284,7 +286,7 @@ class HostingSyncService:
                     jpeg = self._to_jpeg(prev)
                     for attempt in range(3):
                         try:
-                            ok = self._upload_preview(base, gallery_uuid, p["id"], jpeg)
+                            ok = self._upload_preview(base, gallery_uuid, p["rid"], jpeg)
                             if ok:
                                 err = None
                                 break
@@ -380,18 +382,24 @@ class HostingSyncService:
         cur = conn.cursor()
         for pid, it in items.items():
             try:
-                photo_id = int(pid)
+                remote_id = int(pid)
             except (TypeError, ValueError):
                 continue
             sel = str((it or {}).get("status", "UNRATED")).upper()
             if sel not in ("SELECTED", "REJECTED", "UNRATED"):
                 sel = "UNRATED"
             note = str((it or {}).get("note", "") or "")
+            # The album server keys selections by the ORIGINAL photo id; map it to today's local photo
+            cur.execute("""SELECT photo_id FROM client_gallery_photos
+                           WHERE gallery_uuid = ? AND COALESCE(remote_id, photo_id) = ?""", (gallery_uuid, remote_id))
+            r = cur.fetchone()
+            if not r:
+                continue
+            photo_id = r["photo_id"]
             cur.execute("""UPDATE client_gallery_photos SET client_selection = ?, client_note = ?
                            WHERE gallery_uuid = ? AND photo_id = ?""", (sel, note, gallery_uuid, photo_id))
-            if cur.rowcount:
-                cur.execute("UPDATE photos SET client_selection = ?, client_note = ? WHERE id = ?",
-                            (sel, note, photo_id))
+            cur.execute("UPDATE photos SET client_selection = ?, client_note = ? WHERE id = ?",
+                        (sel, note, photo_id))
         cur.execute("""SELECT COUNT(*) AS n FROM client_gallery_photos
                        WHERE gallery_uuid = ? AND client_selection = 'SELECTED'""", (gallery_uuid,))
         n = cur.fetchone()["n"]
@@ -407,6 +415,82 @@ class HostingSyncService:
         conn.commit()
         conn.close()
         return {"pulled": True, "selected_count": n}
+
+
+    # ---------------- Re-attach albums to a project imported again ----------------
+    def fetch_album_photos(self, gallery_uuid: str, base: str) -> Dict[int, str]:
+        """album-server photo id -> file name, read from the album server (for albums whose project was removed)."""
+        try:
+            status, body = _request(_api(base, "get_selections", {"id": gallery_uuid}), headers=_auth_headers(), timeout=10)
+        except RuntimeError:
+            return {}
+        data = _json(body)
+        out: Dict[int, str] = {}
+        if status == 200 and isinstance(data, dict):
+            for ph in data.get("photos") or []:
+                try:
+                    out[int(ph.get("id"))] = str(ph.get("filename") or "")
+                except (TypeError, ValueError, AttributeError):
+                    continue
+        return out
+
+    def relink_albums_for_project(self, project_id: int) -> List[str]:
+        """Client albums whose project was removed from the app are attached to this project again when it holds
+        the same photos (same folder, or most file names match). Album-server ids are kept, so the client's link,
+        PIN and selections keep working; the latest selections are then fetched in the background."""
+        conn = get_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT folder_path FROM projects WHERE id = ?", (project_id,))
+        pr = cur.fetchone()
+        if not pr:
+            conn.close()
+            return []
+        folder = os.path.normcase(os.path.normpath(pr["folder_path"] or ""))
+        cur.execute("SELECT id, filename FROM photos WHERE project_id = ?", (project_id,))
+        by_name: Dict[str, int] = {}
+        for r in cur.fetchall():
+            by_name.setdefault((r["filename"] or "").lower(), r["id"])
+        cur.execute("SELECT * FROM client_galleries WHERE project_id NOT IN (SELECT id FROM projects)")
+        orphans = [dict(r) for r in cur.fetchall()]
+        relinked: List[str] = []
+        for g in orphans:
+            uuid_ = g["gallery_uuid"]
+            cur.execute("SELECT photo_id, filename, remote_id, client_selection, client_note FROM client_gallery_photos WHERE gallery_uuid = ?", (uuid_,))
+            rows = [dict(r) for r in cur.fetchall()]
+            names = {int(r["remote_id"] if r["remote_id"] is not None else r["photo_id"]): (r["filename"] or "") for r in rows}
+            if not any(names.values()) and g.get("hosting_url"):
+                names = self.fetch_album_photos(uuid_, normalize_master_url(g["hosting_url"])) or names
+            matched = {rid: by_name[fn.lower()] for rid, fn in names.items() if fn and fn.lower() in by_name}
+            if not matched:
+                continue
+            same_folder = bool(g.get("folder_path")) and os.path.normcase(os.path.normpath(g["folder_path"])) == folder
+            if not same_folder and len(matched) < max(1, int(0.6 * len(names) + 0.999)):
+                continue
+            old = {int(r["remote_id"] if r["remote_id"] is not None else r["photo_id"]): r for r in rows}
+            cur.execute("DELETE FROM client_gallery_photos WHERE gallery_uuid = ?", (uuid_,))
+            for rid, new_id in matched.items():
+                o = old.get(rid) or {}
+                sel = o.get("client_selection") or "UNRATED"
+                note = o.get("client_note") or ""
+                cur.execute("""INSERT OR REPLACE INTO client_gallery_photos
+                               (gallery_uuid, photo_id, client_selection, client_note, filename, remote_id)
+                               VALUES (?, ?, ?, ?, ?, ?)""", (uuid_, new_id, sel, note, names.get(rid, ""), rid))
+                if sel != "UNRATED" or note:
+                    cur.execute("UPDATE photos SET client_selection = ?, client_note = ? WHERE id = ?", (sel, note, new_id))
+            cur.execute("UPDATE client_galleries SET project_id = ?, folder_path = ? WHERE gallery_uuid = ?",
+                        (project_id, pr["folder_path"], uuid_))
+            relinked.append(uuid_)
+        conn.commit()
+        conn.close()
+        if relinked:
+            def _pull():
+                for u in relinked:
+                    try:
+                        self.pull_selections(u)
+                    except Exception:
+                        pass
+            threading.Thread(target=_pull, daemon=True).start()
+        return relinked
 
 
 hosting_sync_service = HostingSyncService()

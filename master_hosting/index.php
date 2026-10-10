@@ -412,8 +412,15 @@ if ($action === 'get_selections') {
         exit;
     }
     $selFile = $galDir . '/selection.json';
+    $gInfo = file_exists($galDir . '/gallery.json') ? json_decode(file_get_contents($galDir . '/gallery.json'), true) : [];
+    // id -> filename of every album photo: lets the app re-attach an album to a project imported again
+    $photoList = [];
+    foreach (($gInfo['photos'] ?? []) as $ph) {
+        if (isset($ph['id'])) $photoList[] = ['id' => (string)$ph['id'], 'filename' => (string)($ph['filename'] ?? '')];
+    }
     if (!file_exists($selFile)) {
-        echo json_encode(['status' => 'ACTIVE', 'items' => [], 'selected_count' => 0]);
+        echo json_encode(['status' => 'ACTIVE', 'items' => [], 'selected_count' => 0, 'photos' => $photoList,
+                          'expired' => !empty($gInfo['expired_at'])]);
         exit;
     }
 
@@ -423,7 +430,7 @@ if ($action === 'get_selections') {
         if (($item['status'] ?? '') === 'SELECTED') $selectedCount++;
     }
     $selections['selected_count'] = $selectedCount;
-    $gInfo = file_exists($galDir . '/gallery.json') ? json_decode(file_get_contents($galDir . '/gallery.json'), true) : [];
+    $selections['photos'] = $photoList;
     $selections['expired'] = !empty($gInfo['expired_at']);
     $selections['expired_at'] = $gInfo['expired_at'] ?? null;
 
