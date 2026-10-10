@@ -170,7 +170,8 @@ class HostingSyncService:
             return cached[1]
         res: Dict[str, Any] = {"configured": True, "is_master": False, "url": base, "error": None}
         try:
-            status, body = _request(_api(base, "ping"), timeout=12)
+            # Unique query: a CDN in front of the hosting must never answer the health check from cache
+            status, body = _request(_api(base, "ping", {"_": str(int(time.time() * 1000))}), timeout=12)
             data = _json(body)
             if status == 200 and "Master Hosting" in str(data.get("server", "")):
                 res["is_master"] = True
@@ -256,8 +257,12 @@ class HostingSyncService:
                                     {"Content-Type": "application/json", **_auth_headers()})
             if status == 401:
                 raise RuntimeError("Album server needs an active Ai PhotoFlow license (or trial) on this computer.")
+            if status == 404 and not _json(body):
+                raise RuntimeError(f"Album server file not found on the hosting ({base}/index.php, HTTP 404). "
+                                   "Upload the Master Hosting index.php to that folder again, then Retry Upload.")
             if status != 200 or not _json(body).get("success"):
-                raise RuntimeError(f"Gallery sync rejected by hosting (HTTP {status}): {body[:200]!r}")
+                err = _json(body).get("error") or body[:200].decode("utf-8", "replace")
+                raise RuntimeError(f"Gallery sync rejected by hosting (HTTP {status}): {err}")
 
             gallery_dir = os.path.join(PROOFING_CACHE_DIR, gallery_uuid)
             done = [0]

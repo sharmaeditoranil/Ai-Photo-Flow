@@ -7,6 +7,9 @@
 
 ini_set('display_errors', '0');
 header('X-Content-Type-Options: nosniff');
+// Albums, selections and API answers change constantly: a CDN / browser must never cache this script's output
+header('Cache-Control: no-store, no-cache, must-revalidate, max-age=0');
+header('Pragma: no-cache');
 
 // Public key of the Ai PhotoFlow License Server. Only apps holding a server-signed license token
 // for a real license / trial can upload albums here. (Public key: it can verify, never create tokens.)
