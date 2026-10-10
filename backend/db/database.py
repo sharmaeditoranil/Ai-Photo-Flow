@@ -169,6 +169,25 @@ def init_db():
         except Exception:
             pass
 
+    try:
+        cursor.execute("""UPDATE app_settings SET value = 'https://album.aiphotoflow.in'
+                          WHERE key = 'custom_domain_url' AND value LIKE '%aiphotoflow.in%/files/public_html%'""")
+    except Exception:
+        pass
+    # The Ai PhotoFlow album server moved to https://album.aiphotoflow.in: open albums that still point at the
+    # old folder must be uploaded again (the old copy no longer exists), so the app shows "Retry Upload"
+    try:
+        cursor.execute("""
+            UPDATE client_galleries
+            SET hosting_status = 'FAILED',
+                hosting_error = 'Album server moved to album.aiphotoflow.in. Click Retry Upload, then send the new link to the client.'
+            WHERE hosting_url LIKE '%aiphotoflow.in%/files/public_html%'
+              AND COALESCE(status, 'ACTIVE') != 'SUBMITTED'
+              AND COALESCE(hosting_status, '') != 'FAILED'
+        """)
+    except Exception:
+        pass
+
     # Client Gallery Photos Mapping Table
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS client_gallery_photos (

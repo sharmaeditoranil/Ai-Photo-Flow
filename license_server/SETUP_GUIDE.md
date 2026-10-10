@@ -20,7 +20,7 @@ Razorpay Dashboard → Webhooks → URL `https://aiphotoflow.in/license/api.php?
 wahi Webhook Secret jo admin me daala.
 
 ## 4. Album server
-`master_hosting/AiPhotoFlow_Master_Hosting.zip` ko `public_html/files/public_html` me upload + Extract (Overwrite).
+`master_hosting/AiPhotoFlow_Master_Hosting.zip` ko subdomain **album.aiphotoflow.in** ke folder me upload + Extract (Overwrite). App ka album server: https://album.aiphotoflow.in
 Album admin (`?admin=1`) ab License Admin login se khulta hai (purana PIN 1234 band).
 
 ## Backup

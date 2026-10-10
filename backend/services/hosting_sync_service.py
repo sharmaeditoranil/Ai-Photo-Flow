@@ -32,7 +32,9 @@ from backend.db.database import get_connection
 _USER_AGENT = "Mozilla/5.0 (compatible; AiPhotoFlow/1.0; +master-hosting-sync)"
 _TIMEOUT = 30
 # Ai PhotoFlow's own album server; used when the owner has not set a different Master Hosting URL
-DEFAULT_MASTER_URL = "https://aiphotoflow.in/files/public_html"
+DEFAULT_MASTER_URL = "https://album.aiphotoflow.in"
+# Earlier home of the album server (inside the website folder, where website deploys could remove it)
+LEGACY_MASTER_URLS = {"https://aiphotoflow.in/files/public_html", "http://aiphotoflow.in/files/public_html"}
 
 
 def _auth_headers() -> Dict[str, str]:
@@ -136,7 +138,9 @@ class HostingSyncService:
             cur.execute("SELECT value FROM app_settings WHERE key = 'custom_domain_url'")
             row = cur.fetchone()
             conn.close()
-            return normalize_master_url(row["value"] if row and row["value"] else DEFAULT_MASTER_URL)
+            url = normalize_master_url(row["value"] if row and row["value"] else DEFAULT_MASTER_URL)
+            # The Ai PhotoFlow album server moved to its own subdomain; old saved settings follow it
+            return DEFAULT_MASTER_URL if url in LEGACY_MASTER_URLS else url
         except Exception:
             return DEFAULT_MASTER_URL
 
