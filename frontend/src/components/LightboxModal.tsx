@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Photo, UserSelection, EditParameters, HealSpot } from '../types';
 import { api } from '../api';
 import {
@@ -32,7 +32,11 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
 }) => {
   const [zoom, setZoom] = useState<number>(1);
   const [showInfo, setShowInfo] = useState<boolean>(true);
-  const [showOriginal, setShowOriginal] = useState<boolean>(false);
+  // Before / After slider (on by default in fullscreen): left of the handle = original, right = AI edit
+  const [sliderOn, setSliderOn] = useState<boolean>(true);
+  const [splitPos, setSplitPos] = useState<number>(50);
+  const [dragging, setDragging] = useState<boolean>(false);
+  const stageRef = useRef<HTMLDivElement | null>(null);
   const [healActive, setHealActive] = useState<boolean>(false);
   const [imgLoaded, setImgLoaded] = useState<boolean>(false);
 
@@ -91,13 +95,38 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
         onUpdateRating(photo.id, photo.star_rating === rating ? 0 : rating);
       } else if (e.key === '\\' || e.key === '|') {
         e.preventDefault();
-        setShowOriginal(prev => !prev);
+        setHealActive(false);
+        setSliderOn(prev => !prev);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, handleNext, handlePrev, onClose, photo, onUpdateSelection, onUpdateRating]);
+
+  const moveSplit = (clientX: number) => {
+    const el = stageRef.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    if (r.width <= 0) return;
+    setSplitPos(Math.max(0, Math.min(100, ((clientX - r.left) / r.width) * 100)));
+  };
+  const compareActive = sliderOn && !healActive;
+
+  // While dragging, follow the pointer anywhere on screen (fast drags / leaving the photo keep working)
+  useEffect(() => {
+    if (!dragging) return;
+    const onMove = (e: PointerEvent) => moveSplit(e.clientX);
+    const onUp = () => setDragging(false);
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+    return () => {
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    };
+  }, [dragging]);
 
   if (!isOpen || !photo) return null;
 
@@ -182,29 +211,22 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
             )}
           </div>
 
-          {/* Before / After Toggle Button */}
+          {/* Before / After slider on / off */}
           <button
-            onClick={() => setShowOriginal(!showOriginal)}
-            className={`btn btn-sm ${showOriginal ? 'btn-secondary' : 'btn-success'}`}
-            style={{
-              fontSize: '11px',
-              padding: '4px 10px',
-              fontWeight: 600,
-              display: 'flex',
-              alignItems: 'center',
-              gap: '5px'
-            }}
-            title="Toggle Before / After (Shortcut: \)"
+            onClick={() => { setHealActive(false); setSliderOn(!sliderOn); }}
+            className={`btn btn-sm ${compareActive ? 'btn-success' : 'btn-secondary'}`}
+            style={{ fontSize: '11px', padding: '4px 10px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '5px' }}
+            title={"Before / After slider on or off (Shortcut: \\)"}
           >
             <Sliders size={13} />
-            <span>{showOriginal ? 'Before (Original)' : 'After (AI Edited)'}</span>
-            <span style={{ fontSize: '9px', opacity: 0.7 }}>(\)</span>
+            <span>{compareActive ? 'Before / After Slider: On' : 'Before / After Slider: Off'}</span>
+            <span style={{ fontSize: '9px', opacity: 0.7 }}>({'\\'})</span>
           </button>
 
           {/* Heal Brush Button */}
-          {onUpdateEdits && !showOriginal && (
+          {onUpdateEdits && (
             <button
-              onClick={() => setHealActive(!healActive)}
+              onClick={() => { setHealActive(!healActive); if (!healActive) setSliderOn(false); }}
               className={`btn btn-sm ${healActive ? 'btn-success' : 'btn-secondary'}`}
               style={{
                 fontSize: '11px',
@@ -220,7 +242,7 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
               title="Spot Healing Brush (Click to heal blemish/pimple)"
             >
               <Bandage size={13} />
-              <span>{healActive ? '🩹 Heal Active' : '🩹 Heal'}</span>
+              <span>{healActive ? 'Heal Active' : 'Heal'}</span>
             </button>
           )}
 
@@ -334,90 +356,89 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
           </div>
         )}
 
-        {/* Floating Before / After State Indicator */}
+        {/* Photo stage: AI edit, with the original revealed left of the slider handle */}
         <div
-          style={{
-            position: 'absolute',
-            top: '16px',
-            left: '20px',
-            zIndex: 30,
-            background: showOriginal ? 'rgba(239, 68, 68, 0.88)' : 'rgba(16, 185, 129, 0.88)',
-            color: '#fff',
-            padding: '4px 10px',
-            borderRadius: '4px',
-            fontSize: '11px',
-            fontWeight: 700,
-            letterSpacing: '0.4px',
-            boxShadow: '0 2px 8px rgba(0,0,0,0.4)',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '6px'
+          ref={stageRef}
+          className={`lb-stage ${dragging ? 'is-dragging' : ''}`}
+          style={{ transform: `scale(${zoom})`, transition: zoom === 1 ? 'transform 0.15s ease' : 'none' }}
+          onPointerDown={(e) => {
+            if (!compareActive || e.button !== 0) return;
+            e.preventDefault();
+            setDragging(true);
+            moveSplit(e.clientX);
           }}
         >
-          {showOriginal ? (
-            <span>ORIGINAL (UNEDITED)</span>
-          ) : (
+          <img
+            key={`${photo.id}_after`}
+            src={api.getPreviewUrl(photo.id, previewTimestamp || 1)}
+            alt={photo.filename}
+            onLoad={() => setImgLoaded(true)}
+            onClick={(e) => {
+              if (!healActive || !onUpdateEdits) return;
+              const img = e.currentTarget;
+              const rect = img.getBoundingClientRect();
+              const clickX = e.clientX - rect.left;
+              const clickY = e.clientY - rect.top;
+              const normX = Math.max(0, Math.min(1, clickX / rect.width));
+              const normY = Math.max(0, Math.min(1, clickY / rect.height));
+
+              const newSpot: HealSpot = {
+                x: Number(normX.toFixed(4)),
+                y: Number(normY.toFixed(4)),
+                radius: 0.018
+              };
+              const currentSpots = photo.edit_params?.heal_spots || [];
+              onUpdateEdits(photo.id, {
+                ...(photo.edit_params || {
+                  exposure: 0,
+                  temperature: 0,
+                  tint: 0,
+                  contrast: 0,
+                  highlights: 0,
+                  shadows: 0,
+                  whites: 0,
+                  blacks: 0,
+                  vibrance: 0,
+                  saturation: 0,
+                  sharpness: 30,
+                  noise_reduction: 10,
+                  straighten: 0,
+                  preset_name: 'Pure Light (No Color Tone)'
+                }),
+                heal_spots: [...currentSpots, newSpot]
+              });
+            }}
+            style={{
+              maxWidth: '94vw',
+              maxHeight: '84vh',
+              objectFit: 'contain',
+              borderRadius: '6px',
+              display: 'block',
+              cursor: healActive ? 'crosshair' : (compareActive ? 'ew-resize' : 'default')
+            }}
+          />
+
+          {compareActive && imgLoaded && (
             <>
-              <Sparkles size={12} />
-              <span>AI PRO EDITED</span>
+              <img
+                key={`${photo.id}_before`}
+                className="lb-before"
+                src={api.getOriginalUrl(photo.id)}
+                alt=""
+                draggable={false}
+                style={{ clipPath: `inset(0 ${100 - splitPos}% 0 0)` }}
+              />
+              <div className="lb-divider" style={{ left: `${splitPos}%` }}>
+                <div className="lb-handle"><ChevronLeft size={14} /><ChevronRight size={14} /></div>
+              </div>
+              <span className="lb-tag lb-tag-before" style={{ opacity: splitPos > 12 ? 1 : 0 }}>BEFORE</span>
+              <span className="lb-tag lb-tag-after" style={{ opacity: splitPos < 88 ? 1 : 0 }}><Sparkles size={11} /> AFTER</span>
             </>
           )}
-          <span style={{ fontSize: '9px', opacity: 0.8 }}>(Press \ to toggle)</span>
         </div>
-
-        {/* The Photo Itself */}
-        <img
-          key={`${photo.id}_${showOriginal}`}
-          src={showOriginal ? api.getOriginalUrl(photo.id) : api.getPreviewUrl(photo.id, previewTimestamp || 1)}
-          alt={photo.filename}
-          onLoad={() => setImgLoaded(true)}
-          onClick={(e) => {
-            if (!healActive || !onUpdateEdits || showOriginal) return;
-            const img = e.currentTarget;
-            const rect = img.getBoundingClientRect();
-            const clickX = e.clientX - rect.left;
-            const clickY = e.clientY - rect.top;
-            const normX = Math.max(0, Math.min(1, clickX / rect.width));
-            const normY = Math.max(0, Math.min(1, clickY / rect.height));
-
-            const newSpot: HealSpot = {
-              x: Number(normX.toFixed(4)),
-              y: Number(normY.toFixed(4)),
-              radius: 0.018
-            };
-            const currentSpots = photo.edit_params?.heal_spots || [];
-            onUpdateEdits(photo.id, {
-              ...(photo.edit_params || {
-                exposure: 0,
-                temperature: 0,
-                tint: 0,
-                contrast: 0,
-                highlights: 0,
-                shadows: 0,
-                whites: 0,
-                blacks: 0,
-                vibrance: 0,
-                saturation: 0,
-                sharpness: 30,
-                noise_reduction: 10,
-                straighten: 0,
-                preset_name: 'Pure Light (No Color Tone)'
-              }),
-              heal_spots: [...currentSpots, newSpot]
-            });
-          }}
-          style={{
-            maxWidth: '94vw',
-            maxHeight: '84vh',
-            objectFit: 'contain',
-            transform: `scale(${zoom})`,
-            transition: zoom === 1 ? 'transform 0.15s ease' : 'none',
-            borderRadius: '4px',
-            boxShadow: '0 8px 32px rgba(0,0,0,0.8)',
-            display: 'block',
-            cursor: healActive ? 'crosshair' : 'default'
-          }}
-        />
+        {compareActive && imgLoaded && (
+          <div className="lb-hint">Drag the slider left / right to compare · {'\\'} to turn off</div>
+        )}
 
         {/* Floating AI Diagnostics Pill */}
         {showInfo && (
