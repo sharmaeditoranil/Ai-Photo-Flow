@@ -6,7 +6,7 @@ App ke andar koi secret nahi hai; license sirf is server se ban sakta hai.
 ## 1. Upload (5 minute)
 1. hPanel → File Manager → `public_html` ke andar naya folder **`license`** banayein.
 2. `dist-server/AiPhotoFlow_License_Server.zip` us folder me upload karke **Extract** karein.
-3. Browser me kholein: **https://aiphotoflow.in/license/admin.php**
+3. Browser me kholein: **https://license.aiphotoflow.in/admin.php**
 
 ## 2. Admin account (sirf ek baar)
 1. **Setup code** daalein (`~/AiPhotoFlow_Private/license_keys.json` me `setup_code`).
@@ -27,3 +27,12 @@ Album admin (`?admin=1`) ab License Admin login se khulta hai (purana PIN 1234 b
 `~/AiPhotoFlow_Private/` folder (private key) ka backup pen drive / safe jagah rakhein. Ye kho gaya to naye
 licenses nahi ban sakenge. Kisi ko kabhi na dein.
 Server data (licenses, payments) Hostinger par `domains/aiphotoflow.in/apf_license_private/` me hai — hPanel Backups ON rakhein.
+
+
+## Subdomains (10 Oct 2026)
+- License server: **https://license.aiphotoflow.in** (subdomain folder). The server finds the existing
+  `apf_license_private/license.sqlite` automatically, so licenses, payments and the admin login stay the same.
+- Album server: **https://album.aiphotoflow.in**.
+- Razorpay Dashboard -> Webhooks: change the URL to `https://license.aiphotoflow.in/api.php?r=webhook`.
+- Apps fall back to `https://aiphotoflow.in/license` if the subdomain does not answer; keep that folder until every
+  computer has the new app.

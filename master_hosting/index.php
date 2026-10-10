@@ -14,7 +14,7 @@ header('Pragma: no-cache');
 // Public key of the Ai PhotoFlow License Server. Only apps holding a server-signed license token
 // for a real license / trial can upload albums here. (Public key: it can verify, never create tokens.)
 const APF_PUBLIC_KEY_B64 = 'ng3XTGeTg7EgnGmmLbKqqGEOXgLEI6SAoInxccNPfV8=';
-const APF_ADMIN_LOGIN_URL = 'https://aiphotoflow.in/license/admin.php';
+const APF_ADMIN_LOGIN_URL = 'https://license.aiphotoflow.in/admin.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
     http_response_code(200);

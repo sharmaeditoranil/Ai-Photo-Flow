@@ -31,7 +31,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
 from backend.db.database import get_connection
 
-LICENSE_SERVER = os.environ.get("APF_LICENSE_SERVER", "https://aiphotoflow.in/license").rstrip("/")
+LICENSE_SERVER = os.environ.get("APF_LICENSE_SERVER", "https://license.aiphotoflow.in").rstrip("/")
+# Earlier address (inside the website folder); used only if the subdomain does not answer
+LICENSE_SERVER_FALLBACKS = [u for u in ("https://aiphotoflow.in/license",) if u != LICENSE_SERVER]
 # Public half of the server's signing key (safe to ship; it can only verify, never sign)
 LICENSE_PUBLIC_KEY_B64 = "ng3XTGeTg7EgnGmmLbKqqGEOXgLEI6SAoInxccNPfV8="
 APP_VERSION = "1.0.0"
@@ -196,25 +198,43 @@ class LicenseService:
         payload.setdefault("machine_name", self._machine_name())
         payload.setdefault("os", self._os_name())
         payload.setdefault("app_version", APP_VERSION)
-        req = urllib.request.Request(
-            f"{LICENSE_SERVER}/api.php?r={route}", data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json", "User-Agent": _USER_AGENT}, method="POST")
-        try:
-            with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CTX) as resp:
-                data = json.loads(resp.read().decode("utf-8", "replace"))
-        except urllib.error.HTTPError as e:
+        data = None
+        servers = [LICENSE_SERVER] + LICENSE_SERVER_FALLBACKS
+        for i, server in enumerate(servers):
+            req = urllib.request.Request(
+                f"{server}/api.php?r={route}", data=json.dumps(payload).encode(),
+                headers={"Content-Type": "application/json", "User-Agent": _USER_AGENT}, method="POST")
             try:
-                data = json.loads(e.read().decode("utf-8", "replace"))
-            except Exception:
-                raise LicenseServerError(f"License server error (HTTP {e.code}). Please try again.", "SERVER")
-        except (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError, OSError):
-            raise LicenseServerError("No internet connection to the license server.", "OFFLINE", offline=True)
-        except Exception:
-            raise LicenseServerError("License server returned an invalid answer.", "SERVER")
+                data = self._post(req, timeout)
+                break
+            except LicenseServerError as e:
+                # Only "server not there" moves on to the next address; real answers (refusals) never do
+                if i + 1 < len(servers) and e.code in ("OFFLINE", "NOT_FOUND", "BAD_ANSWER", "SERVER"):
+                    continue
+                raise
         if not isinstance(data, dict) or not data.get("ok"):
             data = data if isinstance(data, dict) else {}
             raise LicenseServerError(data.get("error") or "License server refused the request.", data.get("code") or "ERROR")
         return data
+
+    @staticmethod
+    def _post(req, timeout: int) -> Dict[str, Any]:
+        try:
+            with urllib.request.urlopen(req, timeout=timeout, context=_SSL_CTX) as resp:
+                return json.loads(resp.read().decode("utf-8", "replace"))
+        except urllib.error.HTTPError as e:
+            try:
+                data = json.loads(e.read().decode("utf-8", "replace"))
+            except Exception:
+                if e.code == 404:
+                    raise LicenseServerError("License server not reachable at the moment.", "NOT_FOUND", offline=True)
+                raise LicenseServerError(f"License server error (HTTP {e.code}). Please try again.", "SERVER")
+            return data
+        except (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError, OSError):
+            raise LicenseServerError("No internet connection to the license server.", "OFFLINE", offline=True)
+        except Exception:
+            # e.g. a parking / maintenance page instead of the API: treated like being offline (grace period)
+            raise LicenseServerError("License server returned an invalid answer.", "BAD_ANSWER", offline=True)
 
     def _accept_token(self, token: str, license_key: Optional[str]) -> Dict[str, Any]:
         payload = verify_token(token)
