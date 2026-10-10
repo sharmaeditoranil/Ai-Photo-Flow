@@ -49,7 +49,7 @@ export const PricingModal: React.FC<PricingModalProps> = ({
   // Live prices from the License Server (owner changes them in the Admin Panel)
   const [serverPrices, setServerPrices] = useState<any | null>(null);
   const [paymentsEnabled, setPaymentsEnabled] = useState<boolean>(true);
-  const [trialDays, setTrialDays] = useState<number>(3);
+  const [trialDays, setTrialDays] = useState<number>(1);
 
   useEffect(() => {
     if (isOpen) {

@@ -114,7 +114,7 @@ function apf_default_settings() {
             'USD' => ['PRO' => ['monthly' => 7, 'yearly' => 45], 'STUDIO' => ['monthly' => 14, 'yearly' => 89]],
         ]),
         'devices' => json_encode(['PRO' => 1, 'STUDIO' => 3, 'VIP_LIFETIME' => 3]),
-        'trial_days' => '3',
+        'trial_days' => '1',
         'offline_grace_days' => '30',
         'payments_enabled' => '1',
         'razorpay_key_id' => '',
