@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Project, Photo, BatchJob, EditParameters, UserSelection, LicenseStatus } from './types';
 import { api } from './api';
 import { TopBar } from './components/TopBar';
@@ -100,21 +100,30 @@ export const App: React.FC = () => {
     try {
       const proj = await api.getProject(projectId);
       setCurrentProject(proj);
-      loadPhotos(projectId, currentCategory, selectedStar, selectedScene, sortBy);
+      loadPhotos(projectId);   // current on-screen filters (see photoFiltersRef)
     } catch (err) {
       console.error('Error loading project details:', err);
     }
   };
 
+  // The grid always shows the LAST requested filter: an older, slower answer (e.g. Similar Groups) that
+  // arrives after the user already switched to AI Best is ignored, and background refreshes reuse the
+  // filter that is currently on screen instead of one remembered from an older render.
+  const photoFiltersRef = useRef({ cat: currentCategory, stars: selectedStar, scene: selectedScene, sort: sortBy });
+  const photoLoadSeqRef = useRef(0);
+
   const loadPhotos = async (
     projectId: number,
-    cat = currentCategory,
-    stars = selectedStar,
-    scene = selectedScene,
-    sort = sortBy
+    cat = photoFiltersRef.current.cat,
+    stars = photoFiltersRef.current.stars,
+    scene = photoFiltersRef.current.scene,
+    sort = photoFiltersRef.current.sort
   ) => {
+    photoFiltersRef.current = { cat, stars, scene, sort };
+    const seq = ++photoLoadSeqRef.current;
     try {
       const list = await api.getPhotos(projectId, cat, stars, scene, sort);
+      if (seq !== photoLoadSeqRef.current) return;   // a newer request was made meanwhile
       setPhotos(list);
       if (list.length > 0) {
         if (!selectedPhoto || !list.find(p => p.id === selectedPhoto.id)) {
@@ -468,17 +477,17 @@ export const App: React.FC = () => {
           currentCategory={currentCategory}
           onSelectCategory={(cat) => {
             setCurrentCategory(cat);
-            if (currentProject) loadPhotos(currentProject.id, cat, selectedStar, selectedScene, sortBy);
+            if (currentProject) loadPhotos(currentProject.id, cat, photoFiltersRef.current.stars, photoFiltersRef.current.scene, photoFiltersRef.current.sort);
           }}
           selectedStar={selectedStar}
           onSelectStar={(stars) => {
             setSelectedStar(stars);
-            if (currentProject) loadPhotos(currentProject.id, currentCategory, stars, selectedScene, sortBy);
+            if (currentProject) loadPhotos(currentProject.id, photoFiltersRef.current.cat, stars, photoFiltersRef.current.scene, photoFiltersRef.current.sort);
           }}
           selectedScene={selectedScene}
           onSelectScene={(scene) => {
             setSelectedScene(scene);
-            if (currentProject) loadPhotos(currentProject.id, currentCategory, selectedStar, scene, sortBy);
+            if (currentProject) loadPhotos(currentProject.id, photoFiltersRef.current.cat, photoFiltersRef.current.stars, scene, photoFiltersRef.current.sort);
           }}
           counts={currentProject?.counts}
         />
@@ -514,7 +523,7 @@ export const App: React.FC = () => {
               sortBy={sortBy}
               onChangeSortBy={(sort) => {
                 setSortBy(sort);
-                if (currentProject) loadPhotos(currentProject.id, currentCategory, selectedStar, selectedScene, sort);
+                if (currentProject) loadPhotos(currentProject.id, photoFiltersRef.current.cat, photoFiltersRef.current.stars, photoFiltersRef.current.scene, sort);
               }}
               currentCategory={currentCategory}
               projectId={currentProject?.id}
