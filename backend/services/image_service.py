@@ -646,9 +646,13 @@ def _skin_colour_lock(img: np.ndarray, src_u8: np.ndarray, skin_mask: np.ndarray
     region[sel] = out[sel] * 255.0
 
 
+SKIN_FILL_TARGET = 145.0     # skin luma (0..255, about L* 60) below which shaded faces get a gentle fill light
+
+
 def _apply_skin_glow(img: np.ndarray, skin_mask: np.ndarray, strength: float) -> None:
     """In-place on float32 RGB 0..255. Lift at strength 1.0: +4 levels on skin shadows up to +13 on the skin's
-    soft highlights (auto 65%: about +3..+8), fading out on already bright skin; zero outside the skin mask."""
+    soft highlights (auto 65%: about +3..+8), plus a gentle fill light (up to +12) only on faces darker than
+    SKIN_FILL_TARGET; everything fades out on already bright skin and is zero outside the skin mask."""
     h, w = img.shape[:2]
     if skin_mask.shape[:2] != (h, w):
         skin_mask = cv2.resize(skin_mask, (w, h), interpolation=cv2.INTER_LINEAR)
@@ -672,6 +676,13 @@ def _apply_skin_glow(img: np.ndarray, skin_mask: np.ndarray, strength: float) ->
     t = t * t * (3.0 - 2.0 * t)                       # smooth highlight weight 0..1
     feather = cv2.GaussianBlur(ms, (0, 0), max(1.0, sigma * 0.5))
     lift_s = (4.0 + 9.0 * t) * feather * float(np.clip(strength, 0.0, 1.0))
+    # Gentle fill light for faces in shade: each face is judged on its OWN skin brightness (local skin
+    # average), so a shaded bride gets a little light while well-lit faces next to her get none.
+    # Up to +12 levels (~ +5 L*) for clearly dark skin areas, zero from ~L* 60 upwards.
+    big = max(4.0, 0.03 * max(sw, sh))
+    local = cv2.GaussianBlur(Ys * ms, (0, 0), big) / np.maximum(cv2.GaussianBlur(ms, (0, 0), big), 1e-3)
+    fill_k = float(np.clip(strength / 0.65, 0.0, 1.4))
+    lift_s += np.clip((SKIN_FILL_TARGET - local) * 0.30, 0.0, 12.0) * feather * fill_k
     lift = cv2.resize(lift_s, (w, h), interpolation=cv2.INTER_LINEAR) * np.clip(m * 1.5, 0.0, 1.0)
     # Highlight protection: full glow up to well-lit skin (~165), fading to none before white
     lift *= np.clip((232.0 - Y) / 67.0, 0.0, 1.0)
