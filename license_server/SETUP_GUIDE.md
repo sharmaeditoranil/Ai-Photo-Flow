@@ -29,10 +29,11 @@ licenses nahi ban sakenge. Kisi ko kabhi na dein.
 Server data (licenses, payments) Hostinger par `domains/aiphotoflow.in/apf_license_private/` me hai — hPanel Backups ON rakhein.
 
 
-## Subdomains (10 Oct 2026)
-- License server: **https://license.aiphotoflow.in** (subdomain folder). The server finds the existing
-  `apf_license_private/license.sqlite` automatically, so licenses, payments and the admin login stay the same.
-- Album server: **https://license.aiphotoflow.in/album** (folder `album` inside the license subdomain).
-- Razorpay Dashboard -> Webhooks: change the URL to `https://license.aiphotoflow.in/api.php?r=webhook`.
-- Apps fall back to `https://aiphotoflow.in/license` if the subdomain does not answer; keep that folder until every
-  computer has the new app.
+## Fresh install on license.aiphotoflow.in (10 Oct 2026)
+- One zip: `dist-server/LICENSE_AND_ALBUM_license.aiphotoflow.in.zip` -> extract in the subdomain's folder.
+- Admin: https://license.aiphotoflow.in/admin.php (first visit: create the owner account with the setup code
+  from ~/AiPhotoFlow_Private/license_keys.json, then set up 2FA).
+- Album server: https://license.aiphotoflow.in/album
+- Data folder: `apf_license_data`, created next to the subdomain folder, outside any public_html.
+- Razorpay Dashboard -> Webhooks: `https://license.aiphotoflow.in/api.php?r=webhook`; enter Key ID, Key Secret and
+  Webhook Secret again in Admin -> Gateway & Prices.

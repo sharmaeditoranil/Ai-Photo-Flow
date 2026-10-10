@@ -32,8 +32,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from backend.db.database import get_connection
 
 LICENSE_SERVER = os.environ.get("APF_LICENSE_SERVER", "https://license.aiphotoflow.in").rstrip("/")
-# Earlier address (inside the website folder); used only if the subdomain does not answer
-LICENSE_SERVER_FALLBACKS = [u for u in ("https://aiphotoflow.in/license",) if u != LICENSE_SERVER]
+LICENSE_SERVER_FALLBACKS: list = []   # one server only: no second database can ever hand out licenses
 # Public half of the server's signing key (safe to ship; it can only verify, never sign)
 LICENSE_PUBLIC_KEY_B64 = "ng3XTGeTg7EgnGmmLbKqqGEOXgLEI6SAoInxccNPfV8="
 APP_VERSION = "1.0.0"

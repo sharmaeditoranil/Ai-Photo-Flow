@@ -26,22 +26,16 @@ function apf_data_dir() {
     if ($dir !== null) return $dir;
     $candidates = [];
     if (defined('APF_DATA_DIR') && APF_DATA_DIR) $candidates[] = APF_DATA_DIR;
-    // An EXISTING database always wins, wherever this script runs from (main domain /license folder or the
-    // license.aiphotoflow.in subdomain): look for apf_license_private/license.sqlite in the parent folders
-    // and their sibling folders (Hostinger: domains/<domain>/apf_license_private). Never start empty by mistake.
-    if (!defined('APF_DATA_DIR') || !APF_DATA_DIR) {
-        $up = __DIR__;
-        for ($i = 0; $i < 5; $i++) {
-            $up = dirname($up);
-            if (!$up || $up === '/' || $up === '.') break;
-            $found = array_merge([$up . '/apf_license_private'], glob($up . '/*/apf_license_private') ?: []);
-            foreach ($found as $f) {
-                if (is_file($f . '/license.sqlite') && is_writable($f)) { $dir = $f; return $dir; }
-            }
-        }
-    }
     $docRoot = isset($_SERVER['DOCUMENT_ROOT']) ? rtrim($_SERVER['DOCUMENT_ROOT'], '/') : '';
-    if ($docRoot) $candidates[] = dirname($docRoot) . '/apf_license_private';
+    if ($docRoot) {
+        // Next to the web folder, and never inside any public_html (website deploys must not be able to touch it):
+        // /home/u/domains/license.aiphotoflow.in/public_html          -> /home/u/domains/license.aiphotoflow.in
+        // /home/u/domains/aiphotoflow.in/public_html/<subdomain dir>  -> /home/u/domains/aiphotoflow.in
+        $base = dirname($docRoot);
+        $pos = strpos($base . '/', '/public_html/');
+        if ($pos !== false) $base = substr($base, 0, $pos);
+        if ($base) $candidates[] = $base . '/apf_license_data';
+    }
     $candidates[] = dirname(__DIR__) . '/data_' . substr(hash('sha256', APF_SECRET_KEY_B64), 0, 16);
     foreach ($candidates as $c) {
         if (!is_dir($c)) @mkdir($c, 0700, true);
