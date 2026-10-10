@@ -32,9 +32,11 @@ from backend.db.database import get_connection
 _USER_AGENT = "Mozilla/5.0 (compatible; AiPhotoFlow/1.0; +master-hosting-sync)"
 _TIMEOUT = 30
 # Ai PhotoFlow's own album server; used when the owner has not set a different Master Hosting URL
-DEFAULT_MASTER_URL = "https://album.aiphotoflow.in"
-# Earlier home of the album server (inside the website folder, where website deploys could remove it)
-LEGACY_MASTER_URLS = {"https://aiphotoflow.in/files/public_html", "http://aiphotoflow.in/files/public_html"}
+DEFAULT_MASTER_URL = "https://license.aiphotoflow.in/album"
+# Earlier homes of the album server (the website folder, where website deploys could remove it; a planned
+# separate subdomain). Saved settings pointing there follow the server to its current address.
+LEGACY_MASTER_URLS = {"https://aiphotoflow.in/files/public_html", "http://aiphotoflow.in/files/public_html",
+                      "https://album.aiphotoflow.in", "http://album.aiphotoflow.in"}
 
 
 def _auth_headers() -> Dict[str, str]:

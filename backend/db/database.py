@@ -170,20 +170,21 @@ def init_db():
             pass
 
     try:
-        cursor.execute("""UPDATE app_settings SET value = 'https://album.aiphotoflow.in'
-                          WHERE key = 'custom_domain_url' AND value LIKE '%aiphotoflow.in%/files/public_html%'""")
+        cursor.execute("""UPDATE app_settings SET value = 'https://license.aiphotoflow.in/album'
+                          WHERE key = 'custom_domain_url' AND (value LIKE '%aiphotoflow.in%/files/public_html%'
+                                                               OR value LIKE '%album.aiphotoflow.in%')""")
     except Exception:
         pass
-    # The Ai PhotoFlow album server moved to https://album.aiphotoflow.in: open albums that still point at the
-    # old folder must be uploaded again (the old copy no longer exists), so the app shows "Retry Upload"
+    # The Ai PhotoFlow album server moved to https://license.aiphotoflow.in/album: open albums that still point
+    # at an old address must be uploaded again (the old copy no longer exists), so the app shows "Retry Upload"
     try:
         cursor.execute("""
             UPDATE client_galleries
             SET hosting_status = 'FAILED',
-                hosting_error = 'Album server moved to album.aiphotoflow.in. Click Retry Upload, then send the new link to the client.'
-            WHERE hosting_url LIKE '%aiphotoflow.in%/files/public_html%'
+                hosting_error = 'Album server moved to license.aiphotoflow.in/album. Click Retry Upload, then send the new link to the client.'
+            WHERE (hosting_url LIKE '%aiphotoflow.in%/files/public_html%' OR hosting_url LIKE '%album.aiphotoflow.in%')
               AND COALESCE(status, 'ACTIVE') != 'SUBMITTED'
-              AND COALESCE(hosting_status, '') != 'FAILED'
+              AND COALESCE(hosting_error, '') NOT LIKE 'Album server moved to license.aiphotoflow.in%'
         """)
     except Exception:
         pass

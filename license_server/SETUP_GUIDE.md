@@ -20,7 +20,7 @@ Razorpay Dashboard → Webhooks → URL `https://aiphotoflow.in/license/api.php?
 wahi Webhook Secret jo admin me daala.
 
 ## 4. Album server
-`master_hosting/AiPhotoFlow_Master_Hosting.zip` ko subdomain **album.aiphotoflow.in** ke folder me upload + Extract (Overwrite). App ka album server: https://album.aiphotoflow.in
+One zip for both: `dist-server/LICENSE_AND_ALBUM_license.aiphotoflow.in.zip` -> license.aiphotoflow.in folder, Extract. Album: https://license.aiphotoflow.in/album
 Album admin (`?admin=1`) ab License Admin login se khulta hai (purana PIN 1234 band).
 
 ## Backup
@@ -32,7 +32,7 @@ Server data (licenses, payments) Hostinger par `domains/aiphotoflow.in/apf_licen
 ## Subdomains (10 Oct 2026)
 - License server: **https://license.aiphotoflow.in** (subdomain folder). The server finds the existing
   `apf_license_private/license.sqlite` automatically, so licenses, payments and the admin login stay the same.
-- Album server: **https://album.aiphotoflow.in**.
+- Album server: **https://license.aiphotoflow.in/album** (folder `album` inside the license subdomain).
 - Razorpay Dashboard -> Webhooks: change the URL to `https://license.aiphotoflow.in/api.php?r=webhook`.
 - Apps fall back to `https://aiphotoflow.in/license` if the subdomain does not answer; keep that folder until every
   computer has the new app.
