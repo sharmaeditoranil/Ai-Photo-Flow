@@ -244,7 +244,9 @@ if ($isPost) {
     // ---------- Orders ----------
     case 'offline_sale':
         $plan = post('plan'); $cycle = post('cycle');
-        $agentId = post('agent_id') ? (int)post('agent_id') : null;
+        // No partner picked: the customer's referring partner (first purchase) still earns the commission
+        $agentId = post('agent_id') ? (int)post('agent_id')
+                                    : apf_referral_agent('', post('customer_email'), post('customer_phone'));
         $orderId = 'offline_' . bin2hex(random_bytes(6));
         $db->prepare('INSERT INTO orders (order_id, plan, cycle, currency, base_amount, amount, coupon, agent_id, customer_name,
             customer_email, customer_phone, status, created_at, last_ip) VALUES (?, ?, ?, ?, ?, ?, \'\', ?, ?, ?, ?, \'CREATED\', ?, ?)')

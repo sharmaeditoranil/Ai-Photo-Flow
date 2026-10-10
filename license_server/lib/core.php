@@ -424,17 +424,65 @@ function apf_check_coupon($code, $plan) {
     return [$c, null];
 }
 
-function apf_quote($plan, $cycle, $currency, $couponCode) {
+// ------------------------------------------------------------------
+// Customers & referrals: one customer = same computer, email or mobile number.
+// A partner's coupon gives a discount ONCE (first purchase, monthly plan); the partner who referred the
+// customer first earns commission on every later payment of that customer, coupon or not.
+// ------------------------------------------------------------------
+function apf_phone_key($phone) {
+    $d = preg_replace('/\D/', '', (string)$phone);
+    return strlen($d) >= 10 ? substr($d, -10) : '';
+}
+
+/** PAID orders of the same customer, oldest first. */
+function apf_customer_paid_orders($mid, $email, $phone) {
+    $where = []; $args = [];
+    if ($mid !== null && $mid !== '') { $where[] = 'machine_id = ?'; $args[] = (string)$mid; }
+    $email = strtolower(trim((string)$email));
+    if ($email !== '') { $where[] = 'LOWER(customer_email) = ?'; $args[] = $email; }
+    $pk = apf_phone_key($phone);
+    if ($pk !== '') { $where[] = "REPLACE(REPLACE(REPLACE(customer_phone, ' ', ''), '-', ''), '+', '') LIKE ?"; $args[] = '%' . $pk; }
+    if (!$where) return [];
+    $st = apf_db()->prepare("SELECT * FROM orders WHERE status = 'PAID' AND (" . implode(' OR ', $where) . ") ORDER BY COALESCE(paid_at, created_at) ASC, id ASC");
+    $st->execute($args);
+    return $st->fetchAll();
+}
+
+/** Partner (agent id) who referred this customer first, if still active; else null. */
+function apf_referral_agent($mid, $email, $phone) {
+    foreach (apf_customer_paid_orders($mid, $email, $phone) as $o) {
+        if (!$o['agent_id']) continue;
+        $st = apf_db()->prepare("SELECT status FROM agents WHERE id = ?");
+        $st->execute([$o['agent_id']]);
+        return $st->fetchColumn() === 'ACTIVE' ? (int)$o['agent_id'] : null;
+    }
+    return null;
+}
+
+/**
+ * $customer: ['mid' => ..., 'email' => ..., 'phone' => ...] (any may be empty). When given, the once-only
+ * coupon rule is enforced and a payment without coupon is credited to the customer's referring partner.
+ */
+function apf_quote($plan, $cycle, $currency, $couponCode, $customer = null) {
     $base = apf_base_price($plan, $cycle, $currency);
     if ($base === null) return ['ok' => false, 'error' => 'Invalid plan or billing cycle'];
     list($coupon, $err) = apf_check_coupon($couponCode, $plan);
     if ($err) return ['ok' => false, 'error' => $err];
+    if ($coupon && $cycle !== 'monthly') {
+        return ['ok' => false, 'error' => 'Coupon codes work on the monthly plan only (first month).'];
+    }
+    $history = is_array($customer) ? apf_customer_paid_orders($customer['mid'] ?? '', $customer['email'] ?? '', $customer['phone'] ?? '') : [];
+    if ($coupon && $history) {
+        return ['ok' => false, 'error' => 'Coupon codes work only on the first purchase. Please continue without the coupon.'];
+    }
     $pct = $coupon ? (float)$coupon['discount_percent'] : 0.0;
     $discount = $currency === 'INR' ? round($base * $pct / 100) : round($base * $pct / 100, 2);
     $final = max(0, $base - $discount);
     return ['ok' => true, 'plan' => $plan, 'cycle' => $cycle, 'currency' => $currency, 'original_price' => $base,
             'discount_percent' => $pct, 'discount_amount' => $discount, 'final_price' => $final,
-            'coupon' => $coupon ? $coupon['code'] : '', 'agent_id' => $coupon ? $coupon['agent_id'] : null];
+            'coupon' => $coupon ? $coupon['code'] : '',
+            'agent_id' => $coupon ? $coupon['agent_id']
+                                  : (is_array($customer) ? apf_referral_agent($customer['mid'] ?? '', $customer['email'] ?? '', $customer['phone'] ?? '') : null)];
 }
 
 /** Marks an order paid exactly once and creates its license, coupon usage and commission. */

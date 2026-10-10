@@ -135,7 +135,8 @@ case 'profile': {
 }
 
 case 'quote': {
-    $q = apf_quote(strtoupper($in['plan'] ?? ''), strtolower($in['cycle'] ?? ''), strtoupper($in['currency'] ?? 'INR'), $in['coupon'] ?? '');
+    $q = apf_quote(strtoupper($in['plan'] ?? ''), strtolower($in['cycle'] ?? ''), strtoupper($in['currency'] ?? 'INR'), $in['coupon'] ?? '',
+                   ['mid' => apf_str($in['machine_id'] ?? '', 80)]);
     if (!$q['ok']) fail($q['error'], 'COUPON');
     unset($q['agent_id']);
     out($q);
@@ -147,13 +148,14 @@ case 'order': {
     $plan = strtoupper($in['plan'] ?? '');
     if (!in_array($plan, ['PRO', 'STUDIO'], true)) fail('Invalid plan');
     $currency = strtoupper($in['currency'] ?? 'INR') === 'USD' ? 'USD' : 'INR';
-    $q = apf_quote($plan, strtolower($in['cycle'] ?? ''), $currency, $in['coupon'] ?? '');
-    if (!$q['ok']) fail($q['error'], 'COUPON');
     $name = apf_str($in['name'] ?? '', 100);
     $email = apf_str($in['email'] ?? '', 120);
     $phone = apf_str($in['phone'] ?? '', 30);
     if ($name === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) fail('Please enter your name and a valid email address.');
     if (strlen(preg_replace('/\D/', '', $phone)) < 10) fail('Please enter a valid mobile number.');
+    $q = apf_quote($plan, strtolower($in['cycle'] ?? ''), $currency, $in['coupon'] ?? '',
+                   ['mid' => $mid, 'email' => $email, 'phone' => $phone]);
+    if (!$q['ok']) fail($q['error'], 'COUPON');
 
     $db = apf_db();
     $insert = $db->prepare('INSERT INTO orders (order_id, plan, cycle, currency, base_amount, amount, coupon, agent_id,
