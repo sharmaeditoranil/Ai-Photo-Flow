@@ -331,14 +331,27 @@ def apply_edit_pipeline(
         # so hair, eyes and jewellery detail keep their depth and the background is left alone.
         subj_ev = float(getattr(params, 'subject_exposure', 0.0) or 0.0)
         if abs(subj_ev) > 0.01 and subject_mask is not None:
-            luma = img[:, :, 0] * (0.299 / 255.0) + img[:, :, 1] * (0.587 / 255.0) + img[:, :, 2] * (0.114 / 255.0)
-            t = np.clip((luma - 0.40) / 0.45, 0.0, 1.0)
-            weight = 0.35 + 0.65 * (t * t * (3.0 - 2.0 * t))
-            if subj_ev > 0:
-                weight = 1.0 - 0.65 * (t * t * (3.0 - 2.0 * t))   # lifting: protect what is already bright
-            gain = 1.0 + np.clip(subject_mask, 0.0, 1.0) * weight * (2.0 ** subj_ev - 1.0)
-            img *= gain[:, :, np.newaxis].astype(np.float32)
-            del gain, weight, t, luma
+            # The subject mask is built from face / body rectangles and skin-coloured pixels; used as it is, a strong
+            # correction shows its rectangle edges and stray skin-coloured spots as dark grey patches. The light
+            # change is applied through a widely feathered copy instead (soft like a real light falling off).
+            mh, mw = subject_mask.shape[:2]
+            ms_scale = min(1.0, 800.0 / float(max(mh, mw)))
+            m_small = cv2.resize(subject_mask.astype(np.float32), (max(1, int(mw * ms_scale)), max(1, int(mh * ms_scale))),
+                                 interpolation=cv2.INTER_AREA) if ms_scale < 1.0 else subject_mask.astype(np.float32)
+            m_small = cv2.GaussianBlur(m_small, (0, 0), max(2.0, 0.03 * max(m_small.shape[:2])))
+            light_mask = cv2.resize(m_small, (w, h), interpolation=cv2.INTER_LINEAR) if m_small.shape[:2] != (h, w) else m_small
+            ev_gain = (2.0 ** subj_ev - 1.0)
+            # Per-pixel maths done in row strips: identical result, small working memory on 24+ MP exports
+            for y0 in range(0, h, 512):
+                blk = img[y0:y0 + 512]
+                luma = blk[:, :, 0] * (0.299 / 255.0) + blk[:, :, 1] * (0.587 / 255.0) + blk[:, :, 2] * (0.114 / 255.0)
+                t = np.clip((luma - 0.40) / 0.45, 0.0, 1.0)
+                weight = 0.35 + 0.65 * (t * t * (3.0 - 2.0 * t))
+                if subj_ev > 0:
+                    weight = 1.0 - 0.65 * (t * t * (3.0 - 2.0 * t))   # lifting: protect what is already bright
+                gain = 1.0 + np.clip(light_mask[y0:y0 + 512], 0.0, 1.0) * weight * ev_gain
+                blk *= gain[:, :, np.newaxis].astype(np.float32)
+            del light_mask, m_small
             np.clip(img, 0.0, 255.0, out=img)
     except Exception:
         pass
@@ -582,8 +595,80 @@ def apply_edit_pipeline(
         except Exception:
             pass
 
+    # 9.5. Lip colour: a very light chroma boost on lips that are clearly coloured (lipstick). Natural lips that
+    #      are close to the skin colour (usually men) get practically nothing.
+    if retouch_skin is not None and float(getattr(params, 'skin_glow', 0.0) or 0.0) > 0.5:
+        try:
+            _lip_tint(img)
+        except Exception:
+            pass
+
     # Final uint8 clipping
     return np.clip(img, 0, 255).astype(np.uint8)
+
+
+LIP_BOOST_MAX = 0.12          # at most +12% colour on lipstick lips
+LIP_EXCESS_START = 12.0       # lips must be this much more coloured than the cheeks (lipstick) before any boost;
+                              # natural lips (men, no make-up) measured 0-11 -> never touched
+LIP_EXCESS_FULL = 26.0        # full (still light) boost from here
+
+
+def _lip_tint(img: np.ndarray) -> None:
+    """In-place on float32 RGB 0..255. Per face: lip pixels = inside the lip ellipse AND clearly redder than that
+    face's cheeks (teeth, mouth interior and moustache excluded). Boost scales with how much more coloured the
+    lips are than the skin, so painted lips get a little richer and natural lips stay as they are."""
+    from backend.retouch.faces import detect_faces
+    from backend.retouch import geometry
+    h, w = img.shape[:2]
+    s = min(1.0, 1200.0 / float(max(h, w)))
+    sw, sh = max(1, int(w * s)), max(1, int(h * s))
+    small = cv2.resize(np.clip(img, 0, 255).astype(np.uint8), (sw, sh), interpolation=cv2.INTER_AREA) if s < 1.0 \
+        else np.clip(img, 0, 255).astype(np.uint8)
+    faces = detect_faces(small)
+    if not faces:
+        return
+    lab_s = cv2.cvtColor(small, cv2.COLOR_RGB2LAB).astype(np.float32)
+    a_s, b_s, L_s = lab_s[..., 1] - 128.0, lab_s[..., 2] - 128.0, lab_s[..., 0]
+    weight_s = np.zeros((sh, sw), np.float32)
+    for f in faces:
+        if f.estimated or f.iod < 18:
+            continue
+        cheek = np.zeros((sh, sw), np.uint8)
+        for (c, r) in geometry.sample_points(f):
+            cv2.circle(cheek, (int(round(c[0])), int(round(c[1]))), max(2, int(round(r))), 1, -1)
+        lips = np.zeros((sh, sw), np.float32)
+        geometry.draw_lips(lips, f)
+        if int((cheek > 0).sum()) < 10 or int((lips > 0.5).sum()) < 10:
+            continue
+        sa, sb = float(np.median(a_s[cheek > 0])), float(np.median(b_s[cheek > 0]))
+        skin_c = float(np.hypot(sa, sb))
+        sel = (lips > 0.5) & (a_s > sa + 4.0) & (L_s > 0.15 * 255) & (L_s < 0.92 * 255)
+        if int(sel.sum()) < 12:
+            continue
+        lip_c = float(np.median(np.hypot(a_s[sel], b_s[sel])))
+        k = float(np.clip((lip_c - skin_c - LIP_EXCESS_START) / (LIP_EXCESS_FULL - LIP_EXCESS_START), 0.0, 1.0))
+        if k <= 0.0:
+            continue
+        # per-pixel "lipness": how much redder than the cheeks, soft-edged and kept inside the lip ellipse
+        red = np.clip((a_s - sa - 4.0) / 10.0, 0.0, 1.0) * (L_s > 0.15 * 255) * (L_s < 0.92 * 255)
+        wf = cv2.GaussianBlur(red.astype(np.float32) * cv2.GaussianBlur(lips, (0, 0), max(1.0, 0.04 * f.iod)), (0, 0), max(0.8, 0.02 * f.iod))
+        weight_s = np.maximum(weight_s, wf * k)
+    if float(weight_s.max()) < 0.02:
+        return
+    ys, xs = np.where(weight_s > 0.01)
+    y0, y1, x0, x1 = int(ys.min()), int(ys.max()) + 1, int(xs.min()), int(xs.max()) + 1
+    # full-resolution region
+    fx0, fx1, fy0, fy1 = int(x0 / s), min(w, int(x1 / s) + 1), int(y0 / s), min(h, int(y1 / s) + 1)
+    wgt = cv2.resize(weight_s[y0:y1, x0:x1], (fx1 - fx0, fy1 - fy0), interpolation=cv2.INTER_LINEAR)
+    region = img[fy0:fy1, fx0:fx1]
+    lab = cv2.cvtColor(np.clip(region, 0, 255) / 255.0, cv2.COLOR_RGB2LAB)
+    gain = 1.0 + LIP_BOOST_MAX * wgt
+    lab[..., 1] *= gain
+    lab[..., 2] *= gain
+    out = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
+    np.clip(out, 0.0, 1.0, out=out)
+    sel = wgt > 0.002
+    region[sel] = out[sel] * 255.0
 
 
 SKIN_LOCK_HUE_MAX = 50.0     # Lab hue above this reads yellow: the lock never restores more yellow than this
@@ -646,12 +731,12 @@ def _skin_colour_lock(img: np.ndarray, src_u8: np.ndarray, skin_mask: np.ndarray
     region[sel] = out[sel] * 255.0
 
 
-SKIN_FILL_TARGET = 145.0     # skin luma (0..255, about L* 60) below which shaded faces get a gentle fill light
+SKIN_FILL_TARGET = 158.0     # skin luma (0..255, about L* 64) below which faces get a gentle fill light (lifts "sunken" skin)
 
 
 def _apply_skin_glow(img: np.ndarray, skin_mask: np.ndarray, strength: float) -> None:
     """In-place on float32 RGB 0..255. Lift at strength 1.0: +4 levels on skin shadows up to +13 on the skin's
-    soft highlights (auto 65%: about +3..+8), plus a gentle fill light (up to +12) only on faces darker than
+    soft highlights (auto 65%: about +3..+8), plus a gentle fill light (up to +15) only on faces darker than
     SKIN_FILL_TARGET; everything fades out on already bright skin and is zero outside the skin mask."""
     h, w = img.shape[:2]
     if skin_mask.shape[:2] != (h, w):
@@ -678,11 +763,11 @@ def _apply_skin_glow(img: np.ndarray, skin_mask: np.ndarray, strength: float) ->
     lift_s = (4.0 + 9.0 * t) * feather * float(np.clip(strength, 0.0, 1.0))
     # Gentle fill light for faces in shade: each face is judged on its OWN skin brightness (local skin
     # average), so a shaded bride gets a little light while well-lit faces next to her get none.
-    # Up to +12 levels (~ +5 L*) for clearly dark skin areas, zero from ~L* 60 upwards.
+    # Up to +15 levels (~ +6 L*) for clearly dark skin areas, zero from ~L* 64 upwards.
     big = max(4.0, 0.03 * max(sw, sh))
     local = cv2.GaussianBlur(Ys * ms, (0, 0), big) / np.maximum(cv2.GaussianBlur(ms, (0, 0), big), 1e-3)
     fill_k = float(np.clip(strength / 0.65, 0.0, 1.4))
-    lift_s += np.clip((SKIN_FILL_TARGET - local) * 0.30, 0.0, 12.0) * feather * fill_k
+    lift_s += np.clip((SKIN_FILL_TARGET - local) * 0.30, 0.0, 15.0) * feather * fill_k
     lift = cv2.resize(lift_s, (w, h), interpolation=cv2.INTER_LINEAR) * np.clip(m * 1.5, 0.0, 1.0)
     # Highlight protection: full glow up to well-lit skin (~165), fading to none before white
     lift *= np.clip((232.0 - Y) / 67.0, 0.0, 1.0)

@@ -54,7 +54,10 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Ai PhotoFlow"
+      "shortcutName": "Ai PhotoFlow",
+      "perMachine": false,
+      "runAfterFinish": true,
+      "deleteAppDataOnUninstall": false
     },
     "mac": {
       "category": "public.app-category.photography",
@@ -62,7 +65,9 @@
         "dmg"
       ],
       "icon": "build/icon.png",
-      "identity": null,
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
       "extraResources": [
         {
           "from": "dist-backend/photoflow-backend",

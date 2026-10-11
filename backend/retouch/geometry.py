@@ -64,6 +64,13 @@ def draw_features(canvas: np.ndarray, face: Face, margin: float = 0.0):
     _ellipse(canvas, face, c, (0.27 + m, 0.11 + m))
 
 
+def draw_lips(canvas: np.ndarray, face: Face, value: float = 1.0):
+    """Lip area only (same ellipse as the protected lips/teeth zone, without margin)."""
+    mid, half_w, _ = _mouth_info(face)
+    c = mid + face.iod * 0.03 * face.uy
+    _ellipse(canvas, face, c, (half_w + 0.10, 0.24), value)
+
+
 def draw_heal_exclusions(canvas: np.ndarray, face: Face):
     """Extra zones AI Heal must never touch: nose wings / alar creases and inner eye corners
     (natural shading looks like dark spots there) and the bindi / maang-tikka line."""

@@ -329,8 +329,7 @@ def effective_gains(auto_wb: Optional[Dict[str, Any]]) -> Optional[np.ndarray]:
     return gains.astype(np.float32)
 
 
-def apply_white_balance(img: np.ndarray, gains: np.ndarray) -> np.ndarray:
-    """img: float32 RGB 0..255 (sRGB). Gains applied in linear light; returns float32 0..255."""
+def _apply_white_balance_block(img: np.ndarray, gains: np.ndarray) -> np.ndarray:
     lin = srgb_to_linear(np.clip(img, 0, 255) / 255.0).astype(np.float32)
     lin *= gains.reshape(1, 1, 3)
     # Soft roll-off instead of hard clipping in boosted channels
@@ -338,3 +337,17 @@ def apply_white_balance(img: np.ndarray, gains: np.ndarray) -> np.ndarray:
     if np.any(over):
         lin[over] = 0.9 + 0.1 * np.tanh((lin[over] - 0.9) / 0.1)
     return (linear_to_srgb(lin) * 255.0).astype(np.float32)
+
+
+def apply_white_balance(img: np.ndarray, gains: np.ndarray) -> np.ndarray:
+    """img: float32 RGB 0..255 (sRGB). Gains applied in linear light; returns float32 0..255.
+    Purely per-pixel, so large images are processed in row strips: identical result, a few MB of working
+    memory instead of ~1.5 GB of float64 temporaries for a 24 MP photo (keeps parallel exports out of swap)."""
+    h = img.shape[0]
+    strip = 256
+    if h <= strip * 2:
+        return _apply_white_balance_block(img, gains)
+    out = np.empty(img.shape, np.float32)
+    for y in range(0, h, strip):
+        out[y:y + strip] = _apply_white_balance_block(img[y:y + strip], gains)
+    return out

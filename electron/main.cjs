@@ -130,6 +130,12 @@ function startPythonBackend() {
     const logDir = path.join(userHome, '.photoflow');
     if (!fs.existsSync(logDir)) fs.mkdirSync(logDir, { recursive: true });
     const logFilePath = path.join(logDir, 'backend.log');
+    // Keep the log small: start a fresh file when it passes 5 MB (previous one kept as backend.log.1)
+    try {
+      if (fs.existsSync(logFilePath) && fs.statSync(logFilePath).size > 5 * 1024 * 1024) {
+        fs.renameSync(logFilePath, logFilePath + '.1');
+      }
+    } catch (e) {}
     logStream = fs.createWriteStream(logFilePath, { flags: 'a' });
     logStream.write(`\n--- [${new Date().toISOString()}] Launching Backend: ${pythonBin} ---\n`);
   } catch (e) {}

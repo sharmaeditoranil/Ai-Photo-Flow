@@ -356,6 +356,9 @@ SSL must be active on the subdomain. Website deploys go through GitHub (Section 
 | AI Best shows Similar photos | (fixed) stale category list | Update app; switch category again |
 | Yellow / ashy / patchy skin | (fixed) WB, skin lock, mask seam | Re-run Auto Edit with the current app |
 | Photo rotated wrongly | (fixed) straighten | Re-run Auto Edit; straighten slider to 0 |
+| Dark grey patch / box on some photos | (fixed 11 Oct) subject-light mask edges | Re-run Auto Edit with the current app |
+| Export very slow (sometimes) | (fixed 11 Oct) too many workers -> swapping | Update app; close heavy apps; or set `APF_EXPORT_WORKERS=2` |
+| Mac: \"damaged and can't be opened\" | (fixed 11 Oct) incomplete signature | Install the current DMG; right-click → Open once |
 | Client selection missing after removing a project | Normal until re-import | Import the same photos again → album re-attaches (5.9) |
 | Trial already used on a computer | One trial per machine | Admin → Trials → extend, or sell a plan |
 
@@ -449,6 +452,7 @@ Electron picks a free port from 8000 upward (Windows can reserve 8000).
 | 10 Oct | Trial = 1 day; partner code once per customer, lifetime partner commission |
 | 10 Oct | Fullscreen Before/After slider, design polish, per-face fill light |
 | 10 Oct | AI Best stale-list fix; album re-attach after removing a project; album sodium path fix |
+| 11 Oct | Grey-patch fix (feathered subject light), slightly more fill light on shaded skin, light lip colour only on lipstick lips, faster/steadier export, Mac ad-hoc signing, log rotation |
 
 ---
 
@@ -461,3 +465,25 @@ Electron picks a free port from 8000 upward (Windows can reserve 8000).
 6. **Intel Mac build** (`--x64`) if customers need it.
 7. **Photoshop bridge (UXP v2)** — placeholder in the sidebar.
 8. **Health monitor** that pings license + album servers and alerts the owner.
+
+---
+
+## 20. Installing on customers' computers (11 Oct 2026)
+
+**Mac (Apple Silicon M1/M2/M3/M4, macOS 13 Ventura or newer)**
+1. Open `Ai PhotoFlow-1.0.0-arm64.dmg`, drag **Ai PhotoFlow** to **Applications**.
+2. First launch: macOS says the developer cannot be verified (the app is ad-hoc signed, not notarised). Right-click the app → **Open** → **Open**, or System Settings → Privacy & Security → **Open Anyway**. Needed once.
+3. The app is properly sealed (ad-hoc signature), so macOS no longer shows "damaged and can't be opened".
+4. Intel Macs are not supported by this build (see roadmap).
+
+**Windows 10/11 (64-bit)**
+1. Run `Ai PhotoFlow Setup 1.0.0.exe`. If SmartScreen appears: **More info → Run anyway** (installer not code-signed yet).
+2. Installs for the current user (no admin password), desktop + Start-menu shortcuts, starts after install. Uninstall keeps `C:\Users\<name>\.photoflow`.
+3. On first start Windows Firewall may ask about network access (used for local Wi-Fi sharing). Allow on private networks; the app works either way.
+
+**Performance notes**
+* Export runs several photos in parallel. Workers = free RAM ÷ (~1.6 GB per 24 MP photo), at least 2 on 8 GB+ computers, never more than CPU cores − 1, so exports never fall into swap. Support override: environment variable `APF_EXPORT_WORKERS=N`.
+* White balance and subject light are computed in strips (identical result, far less memory).
+* `backend.log` is rotated at 5 MB; per-request lines are no longer written.
+
+Measured on an M-series Mac (24 photos, 24 MP): cull 14 s, auto edit 10 s, export 34 s (1.4 s/photo), app backend ready in ~3 s.

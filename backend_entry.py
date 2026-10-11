@@ -56,7 +56,7 @@ if __name__ == "__main__":
     port = int(os.environ.get("PORT", 8000))
     print(f"Ai PhotoFlow Backend running on 0.0.0.0:{port}...")
     try:
-        uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
+        uvicorn.run(app, host="0.0.0.0", port=port, log_level="info", access_log=False)  # no line per request (UI polls every second)
     except Exception as e:
         import traceback
         err_msg = traceback.format_exc()

@@ -7,6 +7,7 @@ import json
 import threading
 import time
 import os
+import sys
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 
@@ -37,20 +38,64 @@ def _available_ram_gb() -> Optional[float]:
             if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
                 return stat.ullAvailPhys / (1024 ** 3)
             return None
-        # macOS/Linux: total RAM (macOS aggressively caches, so "free" pages under-report)
-        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") * 0.6 / (1024 ** 3)
+        if sys.platform == "darwin":
+            # free + inactive + speculative + purgeable pages: memory the system can hand out without swapping
+            import subprocess, re
+            out = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=3).stdout
+            page = int(re.search(r"page size of (\d+)", out).group(1))
+            pages = 0
+            for key in ("Pages free", "Pages inactive", "Pages speculative", "Pages purgeable"):
+                m = re.search(key + r":\s+(\d+)", out)
+                if m:
+                    pages += int(m.group(1))
+            if pages > 0:
+                return pages * page / (1024 ** 3)
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") * 0.5 / (1024 ** 3)
     except Exception:
         return None
 
 
-def _export_worker_count(max_workers: int = 6, gb_per_worker: float = 1.6) -> int:
-    """Parallel full-res renders are RAM-bound (~1.5 GB peak per 24MP photo). Running more
-    workers than RAM allows pushes the OS into disk swapping, which is far slower than fewer workers."""
+def _export_worker_count(max_workers: int = 6, megapixels: float = 24.0) -> int:
+    """Parallel full-res renders are RAM-bound: measured ~2.3 GB peak for a 24 MP photo (scales with
+    megapixels, + headroom). Running more workers than free RAM allows pushes the OS into disk swapping,
+    which is far slower than fewer workers - the cause of "sometimes very slow" exports."""
+    forced = os.environ.get("APF_EXPORT_WORKERS", "").strip()
+    if forced.isdigit() and int(forced) > 0:          # support / benchmarking override
+        return int(forced)
     cpu_workers = min(max_workers, max(1, (os.cpu_count() or 4) - 1))
+    # Measured on 24 MP files: each extra parallel worker adds ~1.5 GB; 1 -> 2 workers was 1.6x faster even on
+    # a busy 16 GB Mac, 3 workers started swapping. Scales with megapixels.
+    gb_per_worker = 0.3 + 0.055 * max(6.0, float(megapixels))
+    floor_workers = 2 if (_total_ram_gb() or 0) >= 7.5 else 1
     ram = _available_ram_gb()
     if ram is None:
-        return min(cpu_workers, 3)
-    return max(1, min(cpu_workers, int(ram // gb_per_worker)))
+        return min(cpu_workers, floor_workers)
+    by_ram = int(max(0.0, ram - 0.5) // gb_per_worker)
+    return max(1, min(cpu_workers, max(floor_workers, by_ram)))
+
+
+def _total_ram_gb() -> Optional[float]:
+    try:
+        if os.name == "nt":
+            import ctypes
+
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong), ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+
+            stat = MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+                return stat.ullTotalPhys / (1024 ** 3)
+            return None
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES") / (1024 ** 3)
+    except Exception:
+        return None
 
 
 class BatchManager:
@@ -411,7 +456,7 @@ class BatchManager:
 
         # Query photos to export (including client_selection from photos or client_gallery_photos)
         cursor.execute("""
-        SELECT p.id, p.filename, p.file_path, p.ai_recommendation, p.user_selection, p.edit_params, p.is_edited,
+        SELECT p.id, p.filename, p.file_path, p.ai_recommendation, p.user_selection, p.edit_params, p.is_edited, p.width, p.height,
                COALESCE(NULLIF(p.client_selection, ''), gp.client_selection, 'UNRATED') as client_selection,
                COALESCE(NULLIF(p.client_note, ''), gp.client_note, '') as client_note
         FROM photos p
@@ -469,11 +514,19 @@ class BatchManager:
                 self.add_log(job_id, f"Starting High-Res Export for {total} photos to {output_folder} (Multi-Core Accelerated)...")
                 os.makedirs(output_folder, exist_ok=True)
                 import cv2
-                cv2.setNumThreads(1)
                 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-                # Optimize concurrency based on CPU cores and free RAM
-                num_workers = _export_worker_count(max_workers=6)
+                # Optimize concurrency based on CPU cores, photo size and free RAM
+                try:
+                    mp = max((float(p.get("width") or 0) * float(p.get("height") or 0)) for p, _ in export_queue) / 1e6
+                    if max_resolution:
+                        mp = min(mp or 24.0, float(max_resolution) ** 2 * 0.667 / 1e6)
+                except Exception:
+                    mp = 24.0
+                num_workers = _export_worker_count(max_workers=6, megapixels=mp or 24.0)
+                # Share the CPU cores between the workers (one worker may use them all); restored afterwards
+                prev_cv_threads = cv2.getNumThreads()
+                cv2.setNumThreads(max(1, (os.cpu_count() or 4) // num_workers))
                 self.add_log(job_id, f"Using {num_workers} parallel export workers")
                 completed_count = 0
 
@@ -544,6 +597,7 @@ class BatchManager:
                         subf = res.get("subfolder", "output") if res else "output"
                         self.add_log(job_id, f"Exported: {completed_count}/{total} ({pct}%) -> {subf}/{cur_name}")
 
+                cv2.setNumThreads(prev_cv_threads)   # previews / editing get all cores back
                 conn_w = get_connection()
                 c_w = conn_w.cursor()
                 is_cancelled = False
@@ -556,6 +610,12 @@ class BatchManager:
                 conn_w.close()
                 self.add_log(job_id, f"Export completed successfully! Output available in: {output_folder}", "SUCCESS")
             except Exception as exp_err:
+                try:
+                    import cv2 as _cv2
+                    if 'prev_cv_threads' in locals():
+                        _cv2.setNumThreads(prev_cv_threads)
+                except Exception:
+                    pass
                 try:
                     conn_err = get_connection()
                     c_err = conn_err.cursor()
