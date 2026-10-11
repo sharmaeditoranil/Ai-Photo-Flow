@@ -55,6 +55,10 @@ case 'trial': {
     $t = $st->fetch();
     $now = time();
     if (!$t) {
+        // Fresh trials from one internet connection are limited (stops endless trials via virtual machines)
+        $recent = $db->prepare("SELECT COUNT(*) FROM audit_log WHERE action = 'trial_start' AND ip = ? AND ts > ?");
+        $recent->execute([$ip, $now - 30 * 86400]);
+        if ((int)$recent->fetchColumn() >= 3) fail('Free trial limit reached on this network. Please buy a plan to continue.', 'TRIAL_BLOCKED', 403);
         $days = max(0, (int)apf_setting('trial_days'));
         $db->prepare('INSERT INTO trials (machine_id, started_at, expires_at, last_seen, os, machine_name, last_ip) VALUES (?, ?, ?, ?, ?, ?, ?)')
            ->execute([$mid, $now, $now + $days * 86400, $now, apf_str($in['os'] ?? '', 60), apf_str($in['machine_name'] ?? '', 80), $ip]);

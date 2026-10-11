@@ -17,6 +17,7 @@ from backend.services.image_service import load_image, export_photo, generate_ed
 from backend.core.editing_model import IndianWeddingEditingModel
 from backend.core.scene_model import SceneConsistencyEngine
 from backend.core.interfaces import EditParameters
+from backend.core.pipeline_state import pipeline_ready
 
 def _available_ram_gb() -> Optional[float]:
     """Best-effort free physical RAM in GB (no psutil dependency). Returns None if unknown."""
@@ -215,6 +216,8 @@ class BatchManager:
             # Anti-tamper & Crack Protection Check
             from backend.services.license_service import get_license_service
             allowed, sec_msg = get_license_service().verify_operational_permission("CULL")
+            if allowed and not pipeline_ready():
+                allowed, sec_msg = False, "Please activate a license to continue."
             if not allowed:
                 self.add_log(job_id, f"Security Lockdown: {sec_msg}", "ERROR")
                 conn_err = get_connection()
@@ -231,7 +234,7 @@ class BatchManager:
                     self.add_log(job_id, f"Processing: {curr} / {tot} ({pct}%) - {msg}")
 
             def is_canc():
-                return self.cancel_flags.get(job_id, threading.Event()).is_set()
+                return self.cancel_flags.get(job_id, threading.Event()).is_set() or not pipeline_ready()
 
             def is_pau():
                 return not self.pause_flags.get(job_id, threading.Event()).is_set()
@@ -299,7 +302,7 @@ class BatchManager:
                 completed_count = 0
 
                 def process_single(p):
-                    if self.cancel_flags.get(job_id, threading.Event()).is_set():
+                    if self.cancel_flags.get(job_id, threading.Event()).is_set() or not pipeline_ready():
                         return None
                     pid = p["id"]
                     filepath = p["file_path"]
@@ -501,6 +504,8 @@ class BatchManager:
             # Anti-tamper & Crack Protection Check
             from backend.services.license_service import get_license_service
             allowed, sec_msg = get_license_service().verify_operational_permission("EXPORT")
+            if allowed and not pipeline_ready():
+                allowed, sec_msg = False, "Please activate a license to continue."
             if not allowed:
                 self.add_log(job_id, f"Security Lockdown: {sec_msg}", "ERROR")
                 conn_err = get_connection()
@@ -532,7 +537,7 @@ class BatchManager:
 
                 def export_single(item):
                     cancel_evt = self.cancel_flags.get(job_id)
-                    if cancel_evt and cancel_evt.is_set():
+                    if (cancel_evt and cancel_evt.is_set()) or not pipeline_ready():
                         return None
                     idx, (p, choice) = item
                     src_path = p["file_path"]

@@ -14,15 +14,16 @@ echo "== 2/6 TypeScript check"
 echo "== 3/6 Mac build (frontend + PyInstaller backend + DMG)"
 npm run build:dmg
 
-echo "== 4/6 Windows build (same backend code into the embedded-Python bundle, then NSIS installer)"
-rsync -a --delete --exclude "__pycache__" --exclude "*.pyc" --exclude "photoflow.db" --exclude ".photoflow_cache" \
-      backend/ dist-backend-win/backend/
+echo "== 4/6 Windows build (same backend code, compiled to Python 3.10 bytecode without source, then NSIS installer)"
+venv/bin/python scripts/build_win_backend.py
 npx electron-builder --win nsis --x64
 
 echo "== 5/6 Verify"
 hdiutil verify dist-dmg/*.dmg | tail -1
-diff -rq --exclude=__pycache__ --exclude="*.pyc" --exclude=photoflow.db --exclude=.photoflow_cache \
-     backend dist-dmg/win-unpacked/resources/photoflow-backend-win/backend && echo "Windows backend == source"
+WINB=dist-dmg/win-unpacked/resources/photoflow-backend-win/backend
+[ -z "$(find "$WINB" -name '*.py')" ] || { echo "Windows backend contains source files"; exit 1; }
+diff <(cd backend && find . -name '*.py' ! -path '*/.photoflow_cache/*' | sed 's/\.py$//' | sort) \
+     <(cd "$WINB" && find . -name '*.pyc' | sed 's/\.pyc$//' | sort) && echo "Windows backend == source (compiled, no source)"
 
 echo "== 6/6 Server zips"
 venv/bin/python scripts/build_server_bundles.py

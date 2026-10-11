@@ -28,6 +28,7 @@ from backend.core.interfaces import EditParameters
 from backend.core.photoshop_integration import PhotoshopUXPIntegration
 from backend.core.editing_model import IndianWeddingEditingModel
 from backend.services.license_service import get_license_service
+from backend.core.pipeline_state import pipeline_ready
 from backend.services.proofing_service import proofing_service, PROOFING_CACHE_DIR
 from backend.services.tunnel_service import tunnel_service
 from backend.services.hosting_sync_service import hosting_sync_service, normalize_master_url
@@ -49,6 +50,16 @@ culling_service = CullingService()
 photoshop_bridge = PhotoshopUXPIntegration()
 editing_model = IndianWeddingEditingModel()
 license_service = get_license_service()
+
+
+def _require_license(action: str) -> None:
+    """403 unless the licence service AND the independent token check both allow work."""
+    allowed, msg = license_service.verify_operational_permission(action)
+    if allowed and not pipeline_ready():
+        allowed, msg = False, "Please activate a license to continue."
+    if not allowed:
+        raise HTTPException(status_code=403, detail=msg)
+
 
 @app.on_event("startup")
 def on_app_startup():
@@ -681,6 +692,7 @@ def reset_photo_edits(photo_id: int):
 
 @app.post("/api/photos/{photo_id}/auto-edit")
 def auto_edit_single(photo_id: int, preset_name: str = Query("Natural Wedding"), retouch_preset: str = Query("Natural")):
+    _require_license("AUTO_EDIT")
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT file_path, project_id, scene_category, edit_params FROM photos WHERE id = ?", (photo_id,))
@@ -764,7 +776,10 @@ def get_photo_original(photo_id: int):
 def get_photo_preview(photo_id: int):
     """
     Renders high-speed non-destructive preview with current edit parameters applied.
+    Without an active licence only the grid-size image is served.
     """
+    if not (license_service.verify_operational_permission("PREVIEW")[0] and pipeline_ready()):
+        return get_photo_thumbnail(photo_id)
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT file_path, edit_params FROM photos WHERE id = ?", (photo_id,))
@@ -829,10 +844,7 @@ def get_retouch_mask(photo_id: int, kind: str = Query("skin")):
 # --- Batch Processing Operations ---
 @app.post("/api/projects/{project_id}/cull")
 def start_culling(project_id: int):
-    # Anti-tamper & Crack Protection Enforcement Guard
-    allowed, msg = license_service.verify_operational_permission("CULL")
-    if not allowed:
-        raise HTTPException(status_code=403, detail=msg)
+    _require_license("CULL")
     job_id = batch_manager.start_culling_job(project_id)
     return {"job_id": job_id, "status": "started"}
 
@@ -844,18 +856,13 @@ def recluster_project(project_id: int):
 
 @app.post("/api/projects/{project_id}/auto-edit")
 def start_auto_edit(project_id: int, req: AutoEditBatchRequest):
-    allowed, msg = license_service.verify_operational_permission("AUTO_EDIT")
-    if not allowed:
-        raise HTTPException(status_code=403, detail=msg)
+    _require_license("AUTO_EDIT")
     job_id = batch_manager.start_auto_edit_job(project_id, preset_name=req.preset_name, photo_ids=req.photo_ids, retouch_preset=req.retouch_preset)
     return {"job_id": job_id, "status": "started"}
 
 @app.post("/api/projects/{project_id}/export")
 def start_export(project_id: int, req: ExportRequest):
-    # Anti-tamper & Crack Protection Enforcement Guard
-    allowed, msg = license_service.verify_operational_permission("EXPORT")
-    if not allowed:
-        raise HTTPException(status_code=403, detail=msg)
+    _require_license("EXPORT")
     job_id = batch_manager.start_export_job(
         project_id=project_id,
         output_folder=req.output_folder,
@@ -1019,6 +1026,7 @@ class ExportClientSelectedRequest(BaseModel):
 
 @app.post("/api/proofing/create")
 def create_client_gallery(req: CreateGalleryRequest):
+    _require_license("SHARE")
     try:
         res = proofing_service.create_gallery(
             project_id=req.project_id,
@@ -1114,6 +1122,7 @@ class ExportStandaloneGalleryRequest(BaseModel):
 
 @app.post("/api/proofing/export-standalone")
 def export_standalone_web_gallery(req: ExportStandaloneGalleryRequest):
+    _require_license("SHARE")
     try:
         res = proofing_service.export_standalone_gallery(
             gallery_uuid=req.gallery_uuid,
@@ -1134,6 +1143,7 @@ def check_master_hosting(req: HostingCheckRequest):
 
 @app.post("/api/proofing/gallery/{gallery_uuid}/hosting-sync")
 def resync_gallery_to_hosting(gallery_uuid: str):
+    _require_license("SHARE")
     base = hosting_sync_service.get_master_url()
     if not base:
         raise HTTPException(status_code=400, detail="Master Hosting URL is not set")
@@ -1150,6 +1160,7 @@ def get_network_info():
 
 @app.post("/api/proofing/tunnel/start")
 def start_public_tunnel():
+    _require_license("SHARE")
     return tunnel_service.start_tunnel()
 
 @app.post("/api/proofing/tunnel/stop")

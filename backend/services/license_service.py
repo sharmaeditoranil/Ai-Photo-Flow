@@ -94,6 +94,7 @@ class LicenseService:
     _lock = threading.Lock()
     _refresh_running = False
     _last_failed_attempt = 0.0
+    _checked_this_run = False      # one online check per app start (server time exposes a wrong clock)
 
     def __init__(self):
         self.machine_id = self.get_machine_fingerprint()
@@ -169,6 +170,10 @@ class LicenseService:
             pending_order_id TEXT DEFAULT ''
         )""")
         cur.execute("INSERT OR IGNORE INTO license_client (id) VALUES (1)")
+        try:
+            cur.execute("ALTER TABLE license_client ADD COLUMN clock_ack_ts INTEGER DEFAULT 0")
+        except Exception:
+            pass
         conn.commit()
         conn.close()
 
@@ -304,8 +309,24 @@ class LicenseService:
                 if can_retry and (not ended or now - int(row.get("last_refresh_ts") or 0) > REFRESH_EVERY):
                     self.refresh()
                     row = self._row()
-            elif now - int(row.get("last_refresh_ts") or 0) > REFRESH_EVERY and can_retry:
+            elif can_retry and (now - int(row.get("last_refresh_ts") or 0) > REFRESH_EVERY
+                                or not LicenseService._checked_this_run):
                 self._refresh_in_background()
+            LicenseService._checked_this_run = True
+            if row.get("token"):
+                camera_ts = self._camera_clock_ahead(now)
+                if camera_ts > int(row.get("clock_ack_ts") or 0):
+                    # Photos were shot "in the future": the computer clock is probably set back.
+                    # Only the server's time can settle it, so check online now.
+                    if can_retry:
+                        self.refresh()
+                        row = self._row()
+                    payload = verify_token(row.get("token") or "") or {}
+                    if int(row.get("last_refresh_ts") or 0) < now:
+                        return self._locked("OFFLINE", "Your computer's date/time looks wrong. Please correct it "
+                                                       "and connect to the internet once so the app can verify it.")
+                    if now + 3600 >= int(payload.get("iat") or 0):
+                        self._save(clock_ack_ts=camera_ts)   # clock confirmed by the server (camera clock was ahead)
 
         token = row.get("token") or ""
         if not token:
@@ -350,6 +371,23 @@ class LicenseService:
             "features": {"unlimited_photos": paid, "high_res_export": True, "indian_skin_tone": True,
                          "multi_device": plan in ("STUDIO", "VIP_LIFETIME"), "batch_auto_edit": True, "all_culling_rules": True},
         }
+
+    @staticmethod
+    def _camera_clock_ahead(now: int) -> int:
+        """Newest camera time if at least 5 imported photos were shot more than 3 days after 'now', else 0."""
+        limit = time.strftime("%Y:%m:%d %H:%M:%S", time.localtime(now + 3 * 86400))
+        try:
+            conn = get_connection()
+            try:
+                n, newest = conn.execute("SELECT COUNT(*), MAX(exif_date) FROM photos WHERE exif_date > ? "
+                                         "AND exif_date < '2100'", (limit,)).fetchone()
+            finally:
+                conn.close()
+            if int(n or 0) < 5:
+                return 0
+            return int(time.mktime(time.strptime(str(newest)[:19], "%Y:%m:%d %H:%M:%S")))
+        except Exception:
+            return 0
 
     def current_token(self) -> Optional[str]:
         """Valid signed token for this computer (used to authenticate with the album server)."""

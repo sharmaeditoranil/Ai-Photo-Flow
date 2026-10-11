@@ -51,3 +51,6 @@ sample_wedding_export/
 # License server secrets & packages (private key must never be committed)
 dist-server/
 license_server/config.php
+
+# Build tools (Python 3.10 used to compile the Windows backend)
+.tools/

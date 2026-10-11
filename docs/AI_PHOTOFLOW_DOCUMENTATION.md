@@ -185,6 +185,13 @@ Choose categories (AI Best, Customer Selected, Similar, Rejected…), JPEG quali
 * Token refresh every 12 h when online; works offline up to 30 days (setting on server).
 * One trial per computer (machine id); reinstalling does not give a new trial.
 * Server unreachable / maintenance page → app behaves as offline (never locks because the server is down).
+* **Protection layers** (12 Oct 2026):
+  1. Licence service (`license_service.py`) checks the server-signed Ed25519 token (machine id, expiry, offline limit, clock set back).
+  2. Independent second check (`backend/core/pipeline_state.py`) verifies the token signature itself inside every Cull / Auto Edit / Export worker, single-photo Auto Edit, sharing and the full-size preview. Patching layer 1 alone unlocks nothing.
+  3. Windows ships compiled Python 3.10 bytecode only (no `.py` source, `scripts/build_win_backend.py`); Mac ships a PyInstaller archive.
+  4. One online check at every app start (server time exposes a computer clock set back). If ≥5 imported photos were shot more than 3 days "in the future", the app needs one online check before it works again (a frozen/back-dated clock).
+  5. Server: max 3 new free trials per internet connection (IP) in 30 days (stops endless trials with virtual machines); album uploads need a valid signed token.
+* Without an active licence: Cull, Auto Edit (batch and single), Export, Client Link / tunnel / web-gallery export return 403; the fullscreen preview shows only the grid-size image.
 
 ### 5.11 Mac vs Windows
 Identical code and settings (verified pixel-identical edits). Windows uses an embedded Python 3.10 (`dist-backend-win`), Mac a PyInstaller build. The face model (YuNet) is loaded from memory so Windows paths with spaces / Unicode user names work; result is logged in `backend.log`.
@@ -299,8 +306,7 @@ Outputs:
 for t in tests/test_*.py; do venv/bin/python -m unittest "$t"; done
 (cd frontend && npx tsc -p tsconfig.app.json --noEmit)
 npm run build:dmg                                   # frontend + PyInstaller backend + DMG
-rsync -a --delete --exclude "__pycache__" --exclude "*.pyc" --exclude "photoflow.db" --exclude ".photoflow_cache" \
-      backend/ dist-backend-win/backend/            # Windows uses the same backend source
+venv/bin/python scripts/build_win_backend.py        # Windows: same backend, compiled to Python 3.10 bytecode, no source
 npx electron-builder --win nsis --x64               # Windows installer
 ```
 * Version number: `package.json` → `"version"`. Bump it (e.g. 1.0.1) for public releases so users can tell builds apart.
@@ -453,6 +459,7 @@ Electron picks a free port from 8000 upward (Windows can reserve 8000).
 | 10 Oct | Fullscreen Before/After slider, design polish, per-face fill light |
 | 10 Oct | AI Best stale-list fix; album re-attach after removing a project; album sodium path fix |
 | 11 Oct | Grey-patch fix (feathered subject light), slightly more fill light on shaded skin, light lip colour only on lipstick lips, faster/steadier export, Mac ad-hoc signing, log rotation |
+| 12 Oct | Licence hardening: second independent token check in all workers, closed unlicensed single edit / full preview / sharing, Windows without source code, clock check at start + camera dates, 3 trials per IP per 30 days |
 
 ---
 
