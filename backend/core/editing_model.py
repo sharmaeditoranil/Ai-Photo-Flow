@@ -145,8 +145,20 @@ class IndianWeddingEditingModel(EditingModel):
             "color_badge": "#10b981",
             "description": "Crisp dynamic punch for high-energy stages and night receptions."
         },
+        # 11. Natural Wedding (Signature Clean Cool Tone - Removes Yellow Cast)
+        "Natural Wedding": {
+            "exp_target": 139.0,
+            "contrast_bias": 3.0,
+            "temp_bias": -2.5,         # Subtle cool / blue balance to remove yellow cast
+            "vibrance_bias": 6.0,
+            "sat_bias": 0.0,
+            "highlights_bias": -18.0,
+            "shadows_bias": 20.0,
+            "sharpen_bias": 20.0,
+            "color_badge": "#38bdf8",
+            "description": "Clean, natural wedding edit with subtle cool tone, eliminating yellow cast."
+        },
         # Backwards compatibility aliases
-        "Natural Wedding": "Pure Light (No Color Tone)",
         "Bright Wedding": "Soft Pastel & Airy",
         "Warm Wedding": "Warm Golden Amber",
         "Cinematic Soft": "Moody Cinematic Film",
@@ -426,13 +438,13 @@ class IndianWeddingEditingModel(EditingModel):
             contrast = preset["contrast_bias"]
 
         # Whites & Blacks Anchor
-        # On dark background, prevent whites from artificially inflating upper midtones on the subject
+        # User requirement: "PIcture me White kam ho ja raha hai to white kam hone se pic dull dikh raha hai to aapko sirf halka sa white add karna hai, Edit ekdam Natural lage uska dhyan rakhiye."
         if is_dark_bg:
-            whites = float(np.clip((242.0 - sub_p95) * 0.08, -10.0, 2.0))
+            whites = float(np.clip(3.5 + (244.0 - sub_p95) * 0.08, 1.0, 8.0))
             blacks = float(np.clip((sub_p5 - 10.0) * 0.20, -10.0, 5.0))
         else:
-            whites = float(np.clip((242.0 - sub_p95) * 0.20, -14.0, 14.0))
-            blacks = float(np.clip((sub_p5 - 10.0) * 0.20, -14.0, 10.0))
+            whites = float(np.clip(5.5 + (244.0 - sub_p95) * 0.10, 2.0, 14.0))
+            blacks = float(np.clip((sub_p5 - 10.0) * 0.20, -12.0, 8.0))
 
         # 4. Color Balance Focused on the Subject
         # Measure RGB on the subject region so background colored lights don't pollute skin tones
@@ -450,7 +462,7 @@ class IndianWeddingEditingModel(EditingModel):
         g_deviation = sub_g - ((sub_r + sub_b) / 2.0)
 
         # Preset-specific color grading
-        is_pure_light = "Pure Light" in preset_name or preset_name == "Natural Wedding"
+        is_pure_light = "Pure Light" in preset_name and preset_name != "Natural Wedding"
         if is_pure_light:
             auto_temp = 0.0
             auto_tint = 0.0
@@ -460,10 +472,21 @@ class IndianWeddingEditingModel(EditingModel):
             auto_temp = float(np.clip(preset.get("temp_bias", 0.0), -28.0, 22.0))
             auto_tint = 0.0
 
-        # 4. Indian Skin Tone Preservation & Vibrance
+        # 4. Indian Skin Tone Preservation & Adaptive Vibrance/Saturation
         skin_info = self.analyze_indian_skin_chroma(rgb)
         vibrance = preset["vibrance_bias"]
         saturation = preset["sat_bias"]
+
+        # User requirement 3: "Jis Pic me color kam lage usme halka se saturation add kariye Dhyan Rahe Jisme color kam hai sirf usme color add karna hai"
+        if not is_pure_light:
+            hsv_sample = cv2.cvtColor(rgb, cv2.COLOR_RGB2HSV)
+            sat_plane = hsv_sample[:, :, 1]
+            mean_sat = float(np.mean(sat_plane))
+            p75_sat = float(np.percentile(sat_plane, 75))
+            del hsv_sample, sat_plane
+            if mean_sat < 44.0 and p75_sat < 66.0:
+                sat_lift = float(np.clip((46.0 - mean_sat) * 0.22, 2.5, 6.5))
+                saturation = float(np.clip(saturation + sat_lift, -4.0, 14.0))
 
         if skin_info["has_skin"] and not is_pure_light:
             avg_cr = skin_info["avg_cr"] # high Cr = red/magenta flush
@@ -602,7 +625,7 @@ class IndianWeddingEditingModel(EditingModel):
             subject_exposure = float(np.clip(need_ev - min(0.0, exposure), -0.95, 0.0))
             highlights = float(min(highlights, -35.0))
             # Keep the picture crisp after pulling light down: clean whites, a touch more contrast, deeper blacks
-            whites = float(max(whites, 0.0))
+            whites = float(max(whites, 3.0))
             contrast = float(max(contrast, preset["contrast_bias"] + 8.0))
             blacks = float(min(blacks, -5.0))
         else:
@@ -654,9 +677,9 @@ class IndianWeddingEditingModel(EditingModel):
 
     # Clean professional colour (owner: "yellow halka kam, halka blue tone"): whites / greys finish a touch
     # cool, skin stays natural - never yellow, never blue.
-    NEUTRAL_B_TARGET = -1.5    # Lab b* of neutral surfaces after the edit (0 = pure grey, <0 = light blue)
-    SKIN_HUE_YELLOW = 50.0     # Lab hue of skin above this reads yellow
-    SKIN_HUE_COOL_FLOOR = 36.0 # never cool skin below this (grey / pink, lifeless)
+    NEUTRAL_B_TARGET = -2.8    # Lab b* of neutral surfaces after the edit (clean cool blue touch, no yellow cast)
+    SKIN_HUE_YELLOW = 45.0     # Lab hue of skin above this reads yellow: cool it down to natural healthy skin
+    SKIN_HUE_COOL_FLOOR = 35.0 # never cool skin below this (grey / pink, lifeless)
 
     def _calibrate_colour(self, rgb, params, subject_mask, subject_info):
         """Closed-loop colour finish on a 900px render (full pipeline, creative preset tone excluded):

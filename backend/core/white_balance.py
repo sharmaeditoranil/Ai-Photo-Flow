@@ -17,15 +17,15 @@ from typing import Any, Dict, List, Optional
 import cv2
 import numpy as np
 
-# Natural (Indian) skin in camera JPEGs measures 35-48 deg; above ~52 it reads yellow / green.
+# Natural (Indian) skin in camera JPEGs measures 35-46 deg; above ~47 it reads yellow / green.
 SKIN_HUE_MIN = 34.0   # degrees in Lab a*b*; below -> too pink / magenta
-SKIN_HUE_MAX = 52.0   # above -> too yellow / green
-SKIN_HUE_TARGET = 44.0
+SKIN_HUE_MAX = 47.0   # above -> too yellow / green (user requirement: yellow tone kam karna hai)
+SKIN_HUE_TARGET = 41.0 # clean, natural, healthy skin tone without yellow cast
 
-WARM_KEEP = 0.20      # fraction of a warm cast that is kept for ambience (clean, professional colour)
-WARM_KEEP_LOW_KEY = 0.45   # night / lamp-lit scenes: the warm practical light IS the mood, keep more of it
-COOL_STRENGTH = 0.85
-TINT_STRENGTH = 0.92
+WARM_KEEP = 0.06      # neutralize yellow / tungsten indoor cast cleanly (halka cool/blue touch)
+WARM_KEEP_LOW_KEY = 0.15   # keep only gentle warmth in low-key scenes
+COOL_STRENGTH = 0.88
+TINT_STRENGTH = 0.94
 
 
 def srgb_to_linear(x: np.ndarray) -> np.ndarray:

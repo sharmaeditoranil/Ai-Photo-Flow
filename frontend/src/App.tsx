@@ -261,6 +261,19 @@ export const App: React.FC = () => {
     }
   };
 
+  const handleFixBlur = async (photoId: number) => {
+    try {
+      const res = await api.fixBlur(photoId);
+      setPhotos(prev => prev.map(p => p.id === photoId ? { ...p, edit_params: res.edit_params, is_edited: 1, manual_override: 1 } : p));
+      if (selectedPhoto?.id === photoId) {
+        setSelectedPhoto(prev => prev ? { ...prev, edit_params: res.edit_params, is_edited: 1, manual_override: 1 } : null);
+      }
+      setPreviewTimestamp(Date.now());
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
   // 4. Batch Triggers
   // A 403 means the license/trial is not active: explain why and open the plans screen
   const showActionError = (action: string, err: any) => {
@@ -585,6 +598,7 @@ export const App: React.FC = () => {
           onUpdateEdits={handleUpdateEdits}
           onResetEdits={handleResetEdits}
           onAutoEditSingle={handleAutoEditSingle}
+          onFixBlur={handleFixBlur}
           onUpdateSelection={handleUpdateSelection}
         />
       </div>
@@ -688,6 +702,7 @@ export const App: React.FC = () => {
         onUpdateSelection={handleUpdateSelection}
         onUpdateRating={handleUpdateRating}
         onUpdateEdits={handleUpdateEdits}
+        onFixBlur={handleFixBlur}
       />
     </div>
   );

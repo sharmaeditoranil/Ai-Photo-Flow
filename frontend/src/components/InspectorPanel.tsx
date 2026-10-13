@@ -19,6 +19,7 @@ interface InspectorPanelProps {
   onUpdateEdits: (photoId: number, params: EditParameters) => void;
   onResetEdits: (photoId: number) => void;
   onAutoEditSingle: (photoId: number, presetName: string) => void;
+  onFixBlur?: (photoId: number) => void;
   onUpdateSelection?: (photoId: number, selection: UserSelection) => void;
   selectedStylePreset?: string;
   onSelectStylePreset?: (presetName: string) => void;
@@ -31,6 +32,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   onUpdateEdits,
   onResetEdits,
   onAutoEditSingle,
+  onFixBlur,
   onUpdateSelection,
   selectedStylePreset,
   onSelectStylePreset,
@@ -68,6 +70,9 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     skin_smoothing: 0,
     dodge_burn: 0,
     skin_glow: 0,
+    ai_unblur: 0,
+    jewelry_pop: 0,
+    eye_fix_path: null,
     heal_spots: [],
     retouch: null,
     auto_wb: null
@@ -76,6 +81,38 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   const edits: EditParameters = {
     ...defaultEdits,
     ...(photo.edit_params || {})
+  };
+
+  const [isFixingEyes, setIsFixingEyes] = useState(false);
+  const [eyeFixStatus, setEyeFixStatus] = useState<string | null>(null);
+
+  const handleFixEyes = async (donorId?: number) => {
+    setIsFixingEyes(true);
+    setEyeFixStatus(null);
+    try {
+      const res = await api.fixEyes(photo.id, donorId);
+      setEyeFixStatus(res.message);
+      const updated = { ...edits, eye_fix_path: res.eye_fix_path };
+      onUpdateEdits(photo.id, updated);
+    } catch (err: any) {
+      alert(`Eye Fix Error: ${err.message || 'Failed to fix closed eyes'}`);
+    } finally {
+      setIsFixingEyes(false);
+    }
+  };
+
+  const handleRevertEyes = async () => {
+    setIsFixingEyes(true);
+    try {
+      await api.revertEyes(photo.id);
+      const updated = { ...edits, eye_fix_path: null };
+      onUpdateEdits(photo.id, updated);
+      setEyeFixStatus(null);
+    } catch (err: any) {
+      alert(`Revert Error: ${err.message || 'Failed to revert eyes'}`);
+    } finally {
+      setIsFixingEyes(false);
+    }
   };
 
   const handleSliderChange = (key: keyof EditParameters, value: number) => {
@@ -203,6 +240,209 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
           <span style={{ color: '#38bdf8', fontWeight: 700, background: 'rgba(56, 189, 248, 0.15)', padding: '2px 6px', borderRadius: '3px' }}>
             {photo.faces_count > 0 ? (photo.faces_count <= 2 ? 'Subject First: Couple' : `Subject First: ${photo.faces_count} Faces`) : 'Subject First: Ritual / Décor'}
           </span>
+        </div>
+
+        {/* Always-Visible AI Sharpness & Deblur Card */}
+        <div style={{
+          marginTop: '10px',
+          background: (edits.ai_unblur || 0) > 0
+            ? 'rgba(34, 197, 94, 0.12)'
+            : photo.blur_detected
+            ? 'rgba(245, 158, 11, 0.14)'
+            : 'rgba(30, 41, 59, 0.5)',
+          border: (edits.ai_unblur || 0) > 0
+            ? '1px solid rgba(34, 197, 94, 0.4)'
+            : photo.blur_detected
+            ? '1px solid rgba(245, 158, 11, 0.4)'
+            : '1px solid #283042',
+          borderRadius: '7px',
+          padding: '10px 12px'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Sparkles size={13} style={{ color: (edits.ai_unblur || 0) > 0 ? '#34d399' : photo.blur_detected ? '#f59e0b' : '#38bdf8' }} />
+              <div>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span>AI Sharpness & Deblur</span>
+                  {(edits.ai_unblur || 0) > 0 ? (
+                    <span style={{ fontSize: '9px', padding: '1px 5px', background: '#22c55e22', color: '#86efac', borderRadius: '3px', fontWeight: 700 }}>
+                      ACTIVE {(edits.ai_unblur || 0)}%
+                    </span>
+                  ) : null}
+                  {Boolean(photo.blur_detected) && (edits.ai_unblur || 0) === 0 ? (
+                    <span style={{ fontSize: '9px', padding: '1px 5px', background: '#f59e0b22', color: '#fbbf24', borderRadius: '3px', fontWeight: 700 }}>
+                      BLUR DETECTED
+                    </span>
+                  ) : null}
+                </div>
+                <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '1px' }}>
+                  {(edits.ai_unblur || 0) > 0
+                    ? `Restored crisp sharpness to eyes, jewelry & edges`
+                    : photo.blur_detected
+                    ? 'Photo has soft focus/blur. 1-click recovers sharpness.'
+                    : 'Adjust image sharpness & restore soft/blurry focus'}
+                </div>
+              </div>
+            </div>
+
+            <button
+              type="button"
+              onClick={() => onFixBlur ? onFixBlur(photo.id) : handleSliderChange('ai_unblur', (edits.ai_unblur || 0) > 0 ? 0 : 70)}
+              style={{
+                background: (edits.ai_unblur || 0) > 0 ? '#1e293b' : photo.blur_detected ? '#f59e0b' : '#0284c7',
+                color: (edits.ai_unblur || 0) > 0 ? '#94a3b8' : '#ffffff',
+                border: (edits.ai_unblur || 0) > 0 ? '1px solid #334155' : 'none',
+                borderRadius: '5px',
+                padding: '6px 11px',
+                fontSize: '11px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                gap: '4px',
+                boxShadow: (edits.ai_unblur || 0) > 0 ? 'none' : '0 2px 8px rgba(0, 0, 0, 0.3)',
+                flexShrink: 0
+              }}
+            >
+              <Wand2 size={12} />
+              {(edits.ai_unblur || 0) > 0 ? 'Reset' : 'Fix Blur'}
+            </button>
+          </div>
+
+          {/* Both Sharpness & AI Unblur sliders right here */}
+          <div style={{ marginTop: '8px', paddingTop: '8px', borderTop: '1px solid rgba(255, 255, 255, 0.07)', display: 'flex', flexDirection: 'column', gap: '8px' }}>
+            {/* 1. Camera Sharpening */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3px', fontSize: '10.5px' }}>
+                <span style={{ color: '#cbd5e1', fontWeight: 600 }}>Sharpening (शार्पनेस)</span>
+                <span style={{ fontWeight: 700, color: edits.sharpness > 30 ? '#38bdf8' : '#94a3b8' }}>
+                  {edits.sharpness}
+                </span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="60"
+                step="1"
+                value={edits.sharpness}
+                onChange={(e) => handleSliderChange('sharpness', parseFloat(e.target.value))}
+                style={{ width: '100%', height: '4px', accentColor: '#38bdf8', cursor: 'pointer' }}
+              />
+            </div>
+
+            {/* 2. AI Unblur / Focus Recovery */}
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '3px', fontSize: '10.5px' }}>
+                <span style={{ color: '#cbd5e1', fontWeight: 600 }}>AI Unblur (फोकस रिकवरी)</span>
+                <span style={{ fontWeight: 700, color: (edits.ai_unblur || 0) > 0 ? '#34d399' : '#64748b' }}>
+                  {(edits.ai_unblur || 0)}%
+                </span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                value={edits.ai_unblur || 0}
+                onChange={(e) => handleSliderChange('ai_unblur', parseFloat(e.target.value))}
+                style={{ width: '100%', height: '4px', accentColor: '#34d399', cursor: 'pointer' }}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* AI Eye-Blink Fix Card (ग्रुप फोटो में आंखें खोलने वाला टूल) */}
+        <div style={{
+          marginTop: '10px',
+          background: edits.eye_fix_path
+            ? 'rgba(16, 185, 129, 0.12)'
+            : photo.eyes_status !== 'OPEN'
+            ? 'rgba(239, 68, 68, 0.12)'
+            : 'rgba(30, 41, 59, 0.5)',
+          border: edits.eye_fix_path
+            ? '1px solid rgba(16, 185, 129, 0.4)'
+            : photo.eyes_status !== 'OPEN'
+            ? '1px solid rgba(239, 68, 68, 0.4)'
+            : '1px solid #283042',
+          borderRadius: '7px',
+          padding: '10px 12px'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              <Eye size={13} style={{ color: edits.eye_fix_path ? '#34d399' : photo.eyes_status !== 'OPEN' ? '#f87171' : '#38bdf8' }} />
+              <div>
+                <div style={{ fontSize: '11px', fontWeight: 700, color: '#f8fafc', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <span>AI Eye-Blink Fix (आंखें खोलें)</span>
+                  {edits.eye_fix_path ? (
+                    <span style={{ fontSize: '9px', padding: '1px 5px', background: '#10b98122', color: '#6ee7b7', borderRadius: '3px', fontWeight: 700 }}>
+                      EYES FIXED ✓
+                    </span>
+                  ) : photo.eyes_status !== 'OPEN' ? (
+                    <span style={{ fontSize: '9px', padding: '1px 5px', background: '#ef444422', color: '#fca5a5', borderRadius: '3px', fontWeight: 700 }}>
+                      BLINK DETECTED
+                    </span>
+                  ) : null}
+                </div>
+                <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '1px' }}>
+                  {edits.eye_fix_path
+                    ? 'Seamlessly opened closed eyes using matching burst donor shot'
+                    : photo.duplicate_group_id
+                    ? `Auto-swaps closed eyes with open eyes from ${photo.duplicate_group_id} burst`
+                    : 'Auto-swaps closed eyes with open eyes from adjacent shots'}
+                </div>
+              </div>
+            </div>
+
+            {edits.eye_fix_path ? (
+              <button
+                type="button"
+                onClick={handleRevertEyes}
+                disabled={isFixingEyes}
+                style={{
+                  background: '#1e293b',
+                  color: '#94a3b8',
+                  border: '1px solid #334155',
+                  borderRadius: '5px',
+                  padding: '5px 10px',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  cursor: isFixingEyes ? 'wait' : 'pointer',
+                  flexShrink: 0
+                }}
+              >
+                {isFixingEyes ? 'Reverting...' : 'Revert'}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => handleFixEyes()}
+                disabled={isFixingEyes}
+                style={{
+                  background: photo.eyes_status !== 'OPEN' ? '#dc2626' : '#0284c7',
+                  color: '#ffffff',
+                  border: 'none',
+                  borderRadius: '5px',
+                  padding: '5px 10px',
+                  fontSize: '11px',
+                  fontWeight: 700,
+                  cursor: isFixingEyes ? 'wait' : 'pointer',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px',
+                  boxShadow: '0 2px 8px rgba(0, 0, 0, 0.3)',
+                  flexShrink: 0
+                }}
+              >
+                <Eye size={12} />
+                {isFixingEyes ? 'Fixing...' : 'Fix Eyes'}
+              </button>
+            )}
+          </div>
+          {eyeFixStatus && (
+            <div style={{ marginTop: '6px', fontSize: '10px', color: '#34d399', fontWeight: 600 }}>
+              {eyeFixStatus}
+            </div>
+          )}
         </div>
       </div>
 
@@ -930,6 +1170,55 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             step="1"
             value={edits.sharpness}
             onChange={(e) => handleSliderChange('sharpness', parseFloat(e.target.value))}
+          />
+        </div>
+
+        {/* AI Unblur (Focus Recovery) */}
+        <div className="slider-group">
+          <div className="slider-header">
+            <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+              <span>AI Unblur (Focus Recovery)</span>
+              {(edits.ai_unblur ?? 0) > 0 && (
+                <span style={{ fontSize: '9px', padding: '1px 5px', background: '#38bdf822', color: '#38bdf8', borderRadius: '3px', fontWeight: 600 }}>
+                  ACTIVE
+                </span>
+              )}
+            </span>
+            <span className="slider-val">{(edits.ai_unblur ?? 0)}%</span>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="1"
+            value={edits.ai_unblur ?? 0}
+            onChange={(e) => handleSliderChange('ai_unblur', parseFloat(e.target.value))}
+          />
+        </div>
+
+        {/* Jewelry & Attire Pop (गहने और लहंगे की चमक) */}
+        <div className="slider-group">
+          <div className="slider-header">
+            <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+              <span>Jewelry & Attire Pop (गहने/लहंगा)</span>
+              {(edits.jewelry_pop ?? 0) > 0 && (
+                <span style={{ fontSize: '9px', padding: '1px 5px', background: '#f59e0b22', color: '#fbbf24', borderRadius: '3px', fontWeight: 600 }}>
+                  SPARKLE {(edits.jewelry_pop ?? 0)}%
+                </span>
+              )}
+            </span>
+            <span className="slider-val" style={{ color: (edits.jewelry_pop ?? 0) > 0 ? '#fbbf24' : undefined }}>
+              {(edits.jewelry_pop ?? 0)}%
+            </span>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="1"
+            value={edits.jewelry_pop ?? 0}
+            onChange={(e) => handleSliderChange('jewelry_pop', parseFloat(e.target.value))}
+            style={{ accentColor: '#fbbf24' }}
           />
         </div>
 

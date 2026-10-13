@@ -138,7 +138,19 @@ def decode_raw(filepath: str, max_dim: Optional[int] = None) -> np.ndarray:
     """Develops a RAW file to RGB uint8. max_dim limits the long edge (fast half-size demosaic when possible)."""
     import rawpy
 
+    preview = None
+    target_srgb = None
+    rgb16 = None
+
     with rawpy.imread(filepath) as raw:
+        # Extract embedded camera preview FIRST (before postprocess, avoiding LibRawOutOfOrderCallError)
+        try:
+            preview = _camera_preview(raw)
+            if preview is not None:
+                target_srgb = float(np.median(cv2.cvtColor(preview, cv2.COLOR_RGB2GRAY))) / 255.0
+        except Exception:
+            preview = None
+
         full_long = max(raw.sizes.width, raw.sizes.height)
         half = bool(max_dim) and max_dim <= full_long // 2
         params = dict(
@@ -156,9 +168,26 @@ def decode_raw(filepath: str, max_dim: Optional[int] = None) -> np.ndarray:
             rgb16 = raw.postprocess(**params)
         except Exception:
             params.pop("demosaic_algorithm", None)
-            rgb16 = raw.postprocess(**params)
-        preview = _camera_preview(raw)
-        target_srgb = float(np.median(cv2.cvtColor(preview, cv2.COLOR_RGB2GRAY))) / 255.0 if preview is not None else None
+            try:
+                rgb16 = raw.postprocess(**params)
+            except Exception:
+                # Fallback: if camera WB failed, try with auto WB
+                params["use_camera_wb"] = False
+                params["auto_wb"] = True
+                try:
+                    rgb16 = raw.postprocess(**params)
+                except Exception:
+                    rgb16 = None
+
+    if rgb16 is None:
+        if preview is not None:
+            if max_dim:
+                h, w = preview.shape[:2]
+                s = min(1.0, max_dim / float(max(h, w)))
+                if s < 1.0:
+                    preview = cv2.resize(preview, (max(1, int(w * s)), max(1, int(h * s))), interpolation=cv2.INTER_AREA)
+            return preview
+        raise ValueError(f"Failed to develop RAW file: {filepath}")
 
     lin = rgb16.astype(np.float32) / 65535.0
     del rgb16

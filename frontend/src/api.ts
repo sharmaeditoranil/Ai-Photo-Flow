@@ -1,4 +1,4 @@
-import { Project, Photo, BatchJob, EditParameters, UserSelection, RetouchParams, RetouchPreset, MasterHostingInfo } from './types';
+import { Project, Photo, BatchJob, EditParameters, UserSelection, RetouchParams, RetouchPreset, MasterHostingInfo, EyeDonorsResponse, EyeFixResult } from './types';
 
 const electronAPI = typeof window !== 'undefined' ? (window as any).electronAPI : undefined;
 
@@ -171,6 +171,14 @@ export const api = {
     return res.json();
   },
 
+  async fixBlur(photoId: number): Promise<{ edit_params: EditParameters }> {
+    const res = await fetch(`${API_BASE}/photos/${photoId}/fix-blur`, {
+      method: 'POST'
+    });
+    if (!res.ok) throw new Error('Fix blur failed');
+    return res.json();
+  },
+
   // Batch operations
   async startCulling(projectId: number): Promise<{ job_id: string }> {
     const res = await fetch(`${API_BASE}/projects/${projectId}/cull`, { method: 'POST' });
@@ -260,6 +268,31 @@ export const api = {
 
   getPreviewUrl(photoId: number, t?: number): string {
     return `${API_BASE}/photos/${photoId}/preview${t ? `?t=${t}` : ''}`;
+  },
+
+  // AI Eye-Blink Fix (ग्रुप फोटो में आंखें खोलने वाला टूल)
+  async getEyeDonors(photoId: number): Promise<EyeDonorsResponse> {
+    const res = await fetch(`${API_BASE}/photos/${photoId}/eye-donors`);
+    if (!res.ok) throw await apiError(res, 'Failed to find eye donors');
+    return res.json();
+  },
+
+  async fixEyes(photoId: number, donorId?: number): Promise<EyeFixResult> {
+    const res = await fetch(`${API_BASE}/photos/${photoId}/fix-eyes`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ donor_id: donorId ?? null }),
+    });
+    if (!res.ok) throw await apiError(res, 'Failed to fix closed eyes');
+    return res.json();
+  },
+
+  async revertEyes(photoId: number): Promise<{ success: boolean; message: string }> {
+    const res = await fetch(`${API_BASE}/photos/${photoId}/revert-eyes`, {
+      method: 'POST',
+    });
+    if (!res.ok) throw await apiError(res, 'Failed to revert eyes');
+    return res.json();
   },
 
   async getPhotoshopStatus(): Promise<{ available: boolean; status_message: string; v2_ready: boolean }> {

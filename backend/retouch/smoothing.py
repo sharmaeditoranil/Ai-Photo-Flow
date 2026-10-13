@@ -10,7 +10,7 @@ S() is a self-guided (edge-preserving) filter, and r0 is proportional to the per
 (inter-ocular distance), so the look is identical for a 1000 px thumbnail and a 6000 px export and
 consistent between big and small faces in a group photo (each person uses their own scale).
 """
-from typing import List
+from typing import List, Optional
 
 import cv2
 import numpy as np
@@ -33,11 +33,31 @@ def portrait_iod(faces: List[Face], params: dict, short_edge: int) -> float:
     return max(8.0, short_edge * (0.01 + 0.24 * ps ** 1.5))
 
 
-def _smooth_region(lab: np.ndarray, mask: np.ndarray, iod: float, p: dict):
-    amount = float(p.get("amount", 0))
+def _face_scale_factor(iod: float, short_edge: int) -> float:
+    """
+    Close portraits (iod/short_edge >= 0.12): 1.0 (full smoothing).
+    Wide / full-body / group shots (iod/short_edge <= 0.05): 0.40 (gentle, preserves natural facial features).
+    Smooth transition in between.
+    """
+    ratio = iod / max(1.0, float(short_edge))
+    if ratio >= 0.12:
+        return 1.0
+    elif ratio <= 0.05:
+        return 0.40
+    # Smooth Hermite S-curve interpolation between 0.40 and 1.0
+    t = (ratio - 0.05) / (0.12 - 0.05)
+    t = t * t * (3.0 - 2.0 * t)
+    return float(0.40 + 0.60 * t)
+
+
+def _smooth_region(lab: np.ndarray, mask: np.ndarray, iod: float, p: dict, scale_factor: float = 1.0):
+    # Scale smoothing amount and medium/coarse bands down on wide shots so small faces are not over-smoothed
+    amount = float(p.get("amount", 0)) * scale_factor
+    med_slider = float(p.get("medium", 0)) * (0.60 + 0.40 * scale_factor)
+    coarse_slider = float(p.get("coarse", 0)) * (0.60 + 0.40 * scale_factor)
     gf = _band_gain(amount, float(p.get("fine", 0)))
-    gm = _band_gain(amount, float(p.get("medium", 0)))
-    gc = _band_gain(amount, float(p.get("coarse", 0)))
+    gm = _band_gain(amount, med_slider)
+    gc = _band_gain(amount, coarse_slider)
     balance = float(p.get("balance", 0)) / 100.0
     w_dark = min(1.0, 1.0 - balance)
     w_bright = min(1.0, 1.0 + balance)
@@ -61,7 +81,7 @@ def _smooth_region(lab: np.ndarray, mask: np.ndarray, iod: float, p: dict):
     L_new = S3 + apply(coarse, gc) + apply(medium, gm) + apply(fine, gf)
 
     # Even out blotchy colour (gentler than luminance)
-    chroma_k = (amount / 100.0) * max(0.0, float(p.get("medium", 0))) / 100.0 * 0.5
+    chroma_k = (amount / 100.0) * max(0.0, med_slider) / 100.0 * 0.5
     m = mask
     lab[:, :, 0] = L + (L_new - L) * m
     if chroma_k > 0.0:
@@ -71,22 +91,25 @@ def _smooth_region(lab: np.ndarray, mask: np.ndarray, iod: float, p: dict):
             lab[:, :, ch] = c + (c_s - c) * (m * chroma_k)
 
 
-def smooth_skin(lab: np.ndarray, skin: np.ndarray, faces: List[Face], p: dict):
-    """In-place skin smoothing on lab. Each face owns the skin closest to it (group photos)."""
+def smooth_skin(lab: np.ndarray, skin: np.ndarray, faces: List[Face], p: dict, orig_short_edge: Optional[int] = None):
+    """In-place skin smoothing on lab. Each face owns the skin closest to it (group photos).
+    Scales smoothing gracefully so close-up portraits stay smooth while wide shots are natural."""
     if float(p.get("amount", 0)) <= 0.5 or not faces:
         return
     H, W = lab.shape[:2]
     nz = skin > 0.01
     if not np.any(nz):
         return
+    ref_edge = orig_short_edge or min(H, W)
     if len(faces) == 1 or not p.get("autoPortraitSize", True):
         iod = portrait_iod(faces, p, min(H, W))
+        scale_factor = _face_scale_factor(iod, ref_edge)
         ys, xs = np.where(nz)
         pad = int(16 * max(1.0, 0.012 * iod)) + 4
         y0, y1 = max(0, ys.min() - pad), min(H, ys.max() + pad + 1)
         x0, x1 = max(0, xs.min() - pad), min(W, xs.max() + pad + 1)
         sub = lab[y0:y1, x0:x1]
-        _smooth_region(sub, skin[y0:y1, x0:x1], iod, p)
+        _smooth_region(sub, skin[y0:y1, x0:x1], iod, p, scale_factor=scale_factor)
         return
 
     # Group photo: assign skin to the nearest face (distance in that face's own iod units)
@@ -113,4 +136,5 @@ def smooth_skin(lab: np.ndarray, skin: np.ndarray, faces: List[Face], p: dict):
         pad = int(16 * max(1.0, 0.012 * f.iod)) + 4
         y0, y1 = max(0, yy.min() - pad), min(H, yy.max() + pad + 1)
         x0, x1 = max(0, xx.min() - pad), min(W, xx.max() + pad + 1)
-        _smooth_region(lab[y0:y1, x0:x1], m_i[y0:y1, x0:x1], f.iod, p)
+        scale_factor = _face_scale_factor(f.iod, ref_edge)
+        _smooth_region(lab[y0:y1, x0:x1], m_i[y0:y1, x0:x1], f.iod, p, scale_factor=scale_factor)

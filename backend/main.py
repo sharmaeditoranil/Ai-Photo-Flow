@@ -21,7 +21,7 @@ from backend.services.culling_service import CullingService
 from backend.services.batch_service import BatchManager
 from backend.services.image_service import (
     generate_thumbnail, generate_edited_thumbnail, remove_edited_thumbnail,
-    render_preview, load_image, CACHE_DIR
+    render_preview, load_image, CACHE_DIR, is_raw_format
 )
 from backend.retouch import retouch_image, resolve_params as resolve_retouch_params, list_presets as list_retouch_presets, build_preset as build_retouch_preset, DEFAULT_RETOUCH
 from backend.core.interfaces import EditParameters
@@ -32,6 +32,7 @@ from backend.core.pipeline_state import pipeline_ready
 from backend.services.proofing_service import proofing_service, PROOFING_CACHE_DIR
 from backend.services.tunnel_service import tunnel_service
 from backend.services.hosting_sync_service import hosting_sync_service, normalize_master_url
+from backend.services.blink_fix_service import find_eye_donors, swap_eyes, revert_eyes
 
 app = FastAPI(title="Ai PhotoFlow Core API", version="1.0.0")
 
@@ -109,6 +110,7 @@ class EditParametersRequest(BaseModel):
     auto_blemish: float = 0.0
     skin_smoothing: float = 0.0
     dodge_burn: float = 0.0
+    ai_unblur: float = 0.0
     heal_opacity: float = 100.0
     heal_face_preset: str = "AUTO"
     heal_spots: Optional[List[Dict[str, float]]] = []
@@ -161,6 +163,7 @@ DEFAULT_EDIT_PARAMS = {
     "auto_blemish": 0.0,
     "skin_smoothing": 0.0,
     "dodge_burn": 0.0,
+    "ai_unblur": 0.0,
     "heal_spots": [],
     "retouch": None,
     "auto_wb": None
@@ -768,6 +771,48 @@ def auto_edit_single(photo_id: int, preset_name: str = Query("Natural Wedding"),
 
     return {"status": "ok", "photo_id": photo_id, "edit_params": params_dict}
 
+@app.post("/api/photos/{photo_id}/fix-blur")
+def fix_blur_single(photo_id: int):
+    """One-click AI focus & motion deblur: restores tack-sharp eyes, lashes, and facial features."""
+    _require_license("AUTO_EDIT")
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT file_path, project_id, edit_params FROM photos WHERE id = ?", (photo_id,))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Photo not found")
+
+    existing_dict = json.loads(row["edit_params"]) if row["edit_params"] else {}
+    params = EditParameters.from_dict(existing_dict)
+
+    current_unblur = float(getattr(params, "ai_unblur", 0.0) or 0.0)
+    if current_unblur >= 50.0:
+        params.ai_unblur = 0.0 # toggle off if clicked again
+    else:
+        params.ai_unblur = 70.0 # optimal professional focus restoration
+        params.sharpness = min(50.0, max(params.sharpness, 32.0))
+        params.noise_reduction = max(params.noise_reduction, 12.0)
+
+    params_dict = params.to_dict()
+
+    cursor.execute("""
+    UPDATE photos SET
+        edit_params = ?,
+        is_edited = 1,
+        manual_override = 1
+    WHERE id = ?
+    """, (json.dumps(params_dict), photo_id))
+    conn.commit()
+    conn.close()
+
+    try:
+        generate_edited_thumbnail(row["file_path"], row["project_id"], photo_id, params)
+    except Exception:
+        pass
+
+    return {"status": "ok", "photo_id": photo_id, "edit_params": params_dict}
+
 
 # --- Image Serving & Dynamic Previews ---
 @app.get("/api/photos/{photo_id}/thumbnail")
@@ -799,11 +844,24 @@ def get_photo_thumbnail(photo_id: int):
 def get_photo_original(photo_id: int):
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT file_path FROM photos WHERE id = ?", (photo_id,))
+    cursor.execute("SELECT file_path, project_id FROM photos WHERE id = ?", (photo_id,))
     row = cursor.fetchone()
     conn.close()
     if not row or not os.path.exists(row["file_path"]):
         raise HTTPException(status_code=404, detail="File not found on disk")
+
+    if is_raw_format(row["file_path"]):
+        # Browsers cannot display RAW files (.ARW, .CR3, .NEF, .DNG) directly in <img> tags.
+        # Serve high-res developed unedited JPEG so Before/After comparison and lightbox work!
+        try:
+            base_rgb = load_image(row["file_path"], max_dim=2560)
+            success, buffer = cv2.imencode(".jpg", cv2.cvtColor(base_rgb, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 95])
+            if success:
+                return Response(content=buffer.tobytes(), media_type="image/jpeg")
+        except Exception:
+            pass
+        thumb_path = generate_thumbnail(row["file_path"], row["project_id"], photo_id)
+        return FileResponse(thumb_path, media_type="image/jpeg")
 
     return FileResponse(row["file_path"])
 
@@ -874,6 +932,46 @@ def get_retouch_mask(photo_id: int, kind: str = Query("skin")):
         headers={"Cache-Control": "no-cache", "X-Faces": str(res.faces), "X-Spots": str(res.spots),
                  "Access-Control-Expose-Headers": "X-Faces, X-Spots"}
     )
+
+
+# --- AI Eye-Blink Fix (ग्रुप फोटो में आंखें खोलने वाला टूल) ---
+class EyeFixRequest(BaseModel):
+    donor_id: Optional[int] = None
+
+@app.get("/api/photos/{photo_id}/eye-donors")
+def get_photo_eye_donors(photo_id: int):
+    """Finds potential burst/duplicate donor photos with open eyes for the target photo."""
+    try:
+        return find_eye_donors(photo_id)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/photos/{photo_id}/fix-eyes")
+def fix_photo_eyes(photo_id: int, req: Optional[EyeFixRequest] = None):
+    """Swaps closed/blinking eyes with open eyes from matching burst donor."""
+    donor_id = req.donor_id if req else None
+    try:
+        res = swap_eyes(photo_id, donor_photo_id=donor_id)
+        try:
+            remove_edited_thumbnail(photo_id)
+        except Exception:
+            pass
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/api/photos/{photo_id}/revert-eyes")
+def revert_photo_eyes(photo_id: int):
+    """Reverts eye fix to original camera eyes."""
+    try:
+        res = revert_eyes(photo_id)
+        try:
+            remove_edited_thumbnail(photo_id)
+        except Exception:
+            pass
+        return res
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # --- Batch Processing Operations ---

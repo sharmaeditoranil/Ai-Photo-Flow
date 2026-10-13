@@ -79,6 +79,9 @@ export interface EditParameters {
   skin_smoothing?: number;
   dodge_burn?: number;
   skin_glow?: number;
+  ai_unblur?: number;
+  jewelry_pop?: number;
+  eye_fix_path?: string | null;
   heal_spots?: HealSpot[];
   retouch?: RetouchParams | null;
   auto_wb?: AutoWhiteBalance | null;
@@ -244,6 +247,33 @@ export interface CouponVerifyResult {
   final_price?: number;
   currency?: string;
   notes?: string;
+  message: string;
+}
+
+export interface EyeDonor {
+  id: number;
+  filename: string;
+  thumbnail_url: string;
+  eyes_status: EyesStatus;
+  faces_count: number;
+  is_same_burst: boolean;
+}
+
+export interface EyeDonorsResponse {
+  target_photo_id: number;
+  target_filename: string;
+  target_eyes_status: EyesStatus;
+  target_faces_count: number;
+  auto_best_donor_id: number | null;
+  donors: EyeDonor[];
+}
+
+export interface EyeFixResult {
+  success: boolean;
+  fixed_faces: number;
+  donor_id: number;
+  donor_filename: string;
+  eye_fix_path: string;
   message: string;
 }
 

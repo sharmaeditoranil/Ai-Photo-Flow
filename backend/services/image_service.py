@@ -29,7 +29,13 @@ CACHE_DIR = os.path.join(APP_DATA_DIR, "cache")
 os.makedirs(os.path.join(CACHE_DIR, "thumbnails"), exist_ok=True)
 os.makedirs(os.path.join(CACHE_DIR, "previews"), exist_ok=True)
 
+import threading
+from collections import OrderedDict
 from backend.services.raw_decoder import RAW_EXTENSIONS, decode_raw
+
+_raw_cache: "OrderedDict[Tuple[str, Optional[int], float], np.ndarray]" = OrderedDict()
+_raw_cache_lock = threading.Lock()
+_RAW_CACHE_MAX = 8
 
 def is_raw_format(filepath: str) -> bool:
     ext = os.path.splitext(filepath)[1].lower()
@@ -38,12 +44,24 @@ def is_raw_format(filepath: str) -> bool:
 def load_image(filepath: str, max_dim: Optional[int] = None) -> np.ndarray:
     """
     Loads image from disk, supporting JPG, PNG, and RAW (ARW, CR3, NEF, DNG).
-    Returns RGB uint8 numpy array.
+    Returns RGB uint8 numpy array. Cached for fast interactive editing.
     """
     if is_raw_format(filepath):
         try:
+            mtime = os.path.getmtime(filepath)
+        except Exception:
+            mtime = 0.0
+
+        cache_key = (filepath, max_dim, mtime)
+        with _raw_cache_lock:
+            if cache_key in _raw_cache:
+                _raw_cache.move_to_end(cache_key)
+                return _raw_cache[cache_key].copy()
+
+        img = None
+        try:
             # Professional 16-bit linear development matched to the camera's own rendering (raw_decoder.py)
-            return decode_raw(filepath, max_dim=max_dim)
+            img = decode_raw(filepath, max_dim=max_dim)
         except Exception:
             # Unsupported / damaged RAW: fall back to its embedded camera JPEG below
             try:
@@ -57,9 +75,25 @@ def load_image(filepath: str, max_dim: Optional[int] = None) -> np.ndarray:
                         scale = min(max_dim / max(w, h), 1.0)
                         if scale < 1.0:
                             pil_img = pil_img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
-                    return np.array(pil_img.convert("RGB"))
+                    img = np.array(pil_img.convert("RGB"))
+                elif thumb.format == rawpy.ThumbFormat.BITMAP:
+                    bmp = np.asarray(thumb.data)
+                    if max_dim:
+                        h, w = bmp.shape[:2]
+                        scale = min(max_dim / max(w, h), 1.0)
+                        if scale < 1.0:
+                            bmp = cv2.resize(bmp, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+                    img = bmp
             except Exception:
                 pass
+
+        if img is not None:
+            with _raw_cache_lock:
+                _raw_cache[cache_key] = img.copy()
+                _raw_cache.move_to_end(cache_key)
+                while len(_raw_cache) > _RAW_CACHE_MAX:
+                    _raw_cache.popitem(last=False)
+            return img
 
     # Standard reading via Pillow / OpenCV
     try:
@@ -120,8 +154,13 @@ def generate_edited_thumbnail(
     thumb_filename = f"thumb_edited_p{project_id}_{photo_id}.jpg"
     thumb_path = os.path.join(CACHE_DIR, "thumbnails", thumb_filename)
 
+    actual_path = filepath
+    eye_path = getattr(params, 'eye_fix_path', None)
+    if eye_path and os.path.exists(eye_path):
+        actual_path = eye_path
+
     if base_rgb is None:
-        base_rgb = load_image(filepath, max_dim=1400)
+        base_rgb = load_image(actual_path, max_dim=1400)
 
     edited_rgb = apply_edit_pipeline(
         base_rgb,
@@ -134,13 +173,18 @@ def generate_edited_thumbnail(
     pil_thumb.save(thumb_path, format="JPEG", quality=95, optimize=False)
     return thumb_path
 
-def remove_edited_thumbnail(project_id: int, photo_id: int) -> None:
-    """Removes cached edited thumbnail when photo edits are reset."""
-    thumb_filename = f"thumb_edited_p{project_id}_{photo_id}.jpg"
-    thumb_path = os.path.join(CACHE_DIR, "thumbnails", thumb_filename)
-    if os.path.exists(thumb_path):
+def remove_edited_thumbnail(arg1: int, arg2: Optional[int] = None) -> None:
+    """Removes cached edited thumbnail when photo edits are reset or eyes fixed. Accepts (project_id, photo_id) or (photo_id)."""
+    import glob
+    if arg2 is not None:
+        project_id, photo_id = arg1, arg2
+        pattern = f"thumb_edited_p{project_id}_{photo_id}.jpg"
+    else:
+        photo_id = arg1
+        pattern = f"thumb_edited_p*_{photo_id}.jpg"
+    for p in glob.glob(os.path.join(CACHE_DIR, "thumbnails", pattern)):
         try:
-            os.remove(thumb_path)
+            os.remove(p)
         except OSError:
             pass
 
@@ -409,6 +453,53 @@ def apply_edit_pipeline(
             del haze_mask
     except Exception:
         pass
+
+    # E.3. Natural Hair & Facial Hair Deep Black Anchor
+    # User requirement: "Hair Ko Detect kariye accha se face hair aur hair aur usko halka black hi rahne di
+    # hair me jayada light nahi add kare abhi jitna pe hai usme halka sa black add karna hai"
+    try:
+        from backend.retouch.faces import detect_faces
+        faces_detected = detect_faces(small_u8)
+        if faces_detected:
+            hair_canvas = np.zeros((h, w), dtype=np.float32)
+            scale_x = w / float(small_u8.shape[1])
+            scale_y = h / float(small_u8.shape[0])
+            for f in faces_detected:
+                # 1. Head hair zone (dome above forehead & temples)
+                hc_x, hc_y = f.to_xy(0.0, -1.05)
+                hc_x *= scale_x
+                hc_y *= scale_y
+                iod_scaled = f.iod * ((scale_x + scale_y) * 0.5)
+                ax_h = max(10, int(round(1.25 * iod_scaled)))
+                ay_h = max(10, int(round(1.10 * iod_scaled)))
+                cv2.ellipse(hair_canvas, (int(round(hc_x)), int(round(hc_y))), (ax_h, ay_h), f.angle_deg, 0, 360, 1.0, -1)
+
+                # 2. Eyebrows
+                for eye_pt, side in ((f.landmarks[0], -1.0), (f.landmarks[1], 1.0)):
+                    c_pt = eye_pt + f.iod * (side * 0.05 * f.ux - 0.35 * f.uy)
+                    cv2.ellipse(hair_canvas, (int(round(c_pt[0] * scale_x)), int(round(c_pt[1] * scale_y))),
+                                (int(0.45 * iod_scaled), int(0.22 * iod_scaled)), f.angle_deg, 0, 360, 1.0, -1)
+
+                # 3. Mustache & Beard
+                mm_pt = (f.landmarks[3] + f.landmarks[4]) / 2.0
+                cv2.ellipse(hair_canvas, (int(round(mm_pt[0] * scale_x)), int(round(mm_pt[1] * scale_y))),
+                            (int(0.65 * iod_scaled), int(0.60 * iod_scaled)), f.angle_deg, 0, 360, 1.0, -1)
+
+            # Feather the hair canvas smoothly
+            blur_rad = max(3.0, 0.035 * max(h, w))
+            hair_canvas = cv2.GaussianBlur(hair_canvas, (0, 0), blur_rad)
+
+            # Precise pixel isolation: only dark hair tones (exclude bright skin & highlights)
+            dark_hair_gate = np.clip((78.0 - L) / 55.0, 0.0, 1.0)
+            hair_mask = hair_canvas * dark_hair_gate
+
+            # Hair black anchor: pulls hair shadows into rich natural black without clipping specular highlights
+            hair_deepen = hair_mask * 0.075 * np.clip((78.0 - L) / 60.0, 0.0, 1.0)
+            L = np.clip(L * (1.0 - hair_deepen), 0.0, 255.0)
+            del hair_canvas, hair_mask, hair_deepen, dark_hair_gate
+    except Exception:
+        pass
+
     # The float RGB buffer is rebuilt from LAB below; release it during the detail stage
     img = None
     clahe_L = None
@@ -475,6 +566,64 @@ def apply_edit_pipeline(
         del crisp_boost
         np.clip(L, 0.0, 255.0, out=L)
 
+        # F.2. AI Focus & Motion Deblur (Tack-Sharp Eyes, Outlines & Micro-Detail Recovery)
+        ai_unblur = float(getattr(params, 'ai_unblur', 0.0) or 0.0)
+        if ai_unblur > 0.5:
+            unblur_k = float(np.clip(ai_unblur / 100.0, 0.0, 1.0))
+            lh, lw = L.shape[:2]
+            sig_coarse = max(1.8, min(lh, lw) * 0.0016)
+            sig_fine = max(0.85, min(lh, lw) * 0.0007)
+
+            k_c = cv2.GaussianBlur(L, (0, 0), sigmaX=sig_coarse)
+            h_c = L - k_c
+            k_f = cv2.GaussianBlur(L, (0, 0), sigmaX=sig_fine)
+            h_f = L - k_f
+            del k_c, k_f
+
+            # Local contrast gradient
+            g_u = np.clip(L, 0.0, 255.0).astype(np.uint8)
+            gx = cv2.Sobel(g_u, cv2.CV_32F, 1, 0, ksize=3)
+            gy = cv2.Sobel(g_u, cv2.CV_32F, 0, 1, ksize=3)
+            mag_unblur = cv2.magnitude(gx, gy)
+            del g_u, gx, gy
+
+            # Focus recovery mask: concentrates restoration on eye pupils, iris, eyelashes, lips, hair & jewelry
+            recov_mask = np.clip((mag_unblur - 8.0) / 24.0, 0.0, 1.0)
+            del mag_unblur
+
+            deblur_delta = (h_f * 1.35 + h_c * 0.65) * recov_mask * unblur_k
+            del h_f, h_c, recov_mask
+            np.clip(deblur_delta, -28.0 * unblur_k, 28.0 * unblur_k, out=deblur_delta)
+
+            # Skin protection: keep retouched skin smooth so pores don't look noisy
+            if retouch_skin is not None:
+                deblur_delta *= (1.0 - 0.70 * retouch_skin)
+
+            L = np.clip(L + deblur_delta, 0.0, 255.0)
+            del deblur_delta
+
+        # F.3. Jewelry & Dress Texture Pop (गहने और लहंगे की चमक)
+        # Enhances high-frequency metallic reflections, micro-facets of gold/diamond jewelry,
+        # and intricate embroidery / zari work on wedding attire, while fully protecting smooth skin.
+        j_pop = float(getattr(params, 'jewelry_pop', 0.0) or 0.0)
+        if j_pop > 0.5:
+            j_k = float(np.clip(j_pop / 100.0, 0.0, 1.0))
+            # Micro-detail extraction with 3x3 Laplacian on Luminance
+            lap = cv2.Laplacian(L, cv2.CV_32F, ksize=3)
+            # Specular luminance boost: jewelry and embroidery gleam at mid-to-high luminance
+            specular = np.clip((L - 110.0) / 70.0, 0.0, 1.0)
+            facet_detail = np.clip(lap * 0.48, -22.0, 22.0) * (0.60 + 0.40 * specular) * j_k
+            del lap, specular
+
+            # Strict skin protection: do not add texture/noise back onto smoothed facial skin
+            if retouch_skin is not None:
+                facet_detail *= (1.0 - 0.85 * retouch_skin)
+            elif cached_skin_feather is not None:
+                facet_detail *= (1.0 - 0.85 * cached_skin_feather)
+
+            L = np.clip(L + facet_detail, 0.0, 255.0)
+            del facet_detail
+
     except Exception:
         pass
 
@@ -506,30 +655,36 @@ def apply_edit_pipeline(
         img = cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB).astype(np.float32)
         del hsv
 
-    # 5.5. Luminance-Neutral gentle skin radiance (Signature Wedding Glow, kept subtle: no yellow cast)
-    # Strictly bypassed in Pure Light mode so original colors remain 100% untouched!
+    # 5.5. Clean Skin Porcelain White & Signature Wedding Radiance
+    # User feedback: "Skin Pe Halka Sa White Aur Add hona chahiye... dekhne ke baad jaruri lage to kariye"
+    # Lifts skin luminance gently (+5 to +7 levels) while neutralizing dull yellow stage casts to give a clean,
+    # radiant porcelain bridal tone. Highlights roll off smoothly before 235 so forehead/cheeks never blow out.
     if not is_pure_light:
         try:
-            if cached_skin_feather is not None:
-                skin_f = cached_skin_feather
+            skin_mask_eff = retouch_skin if retouch_skin is not None else cached_skin_feather
+            if skin_mask_eff is not None:
+                skin_f = skin_mask_eff
+                if skin_f.shape[:2] != img.shape[:2]:
+                    skin_f = cv2.resize(skin_f, (img.shape[1], img.shape[0]), interpolation=cv2.INTER_LINEAR)
 
-                # Measure pre-warmth perceived luminance
-                Y_before = 0.299 * img[:, :, 0] + 0.587 * img[:, :, 1] + 0.114 * img[:, :, 2]
+                # Perceived luminance
+                Y_skin = 0.299 * img[:, :, 0] + 0.587 * img[:, :, 1] + 0.114 * img[:, :, 2]
 
-                # Gentle warm skin radiance (red-led, no green, so skin glows without turning yellow)
-                img[:, :, 0] *= (1.0 + (0.025 * skin_f))
-                img[:, :, 2] *= (1.0 - (0.020 * skin_f))
+                # Highlight roll-off: full lift on midtones (100-180), smoothly tapering to zero above 230
+                roll_off = np.clip((232.0 - Y_skin) / 52.0, 0.0, 1.0)
 
-                # Measure post-warmth perceived luminance
-                Y_after = 0.299 * img[:, :, 0] + 0.587 * img[:, :, 1] + 0.114 * img[:, :, 2]
+                # Porcelain white brightness lift: +5.5 levels on skin midtones
+                skin_white_lift = 5.5 * skin_f * roll_off
 
-                # Strictly preserve original luminance on skin pixels so exposure never overshoots!
-                scale = np.where(skin_f > 0.05, Y_before / np.maximum(1.0, Y_after), 1.0)
-                del Y_before, Y_after
-                np.clip(scale, 0.90, 1.10, out=scale)
+                # Clean tone: neutralize excessive yellow cast on skin highlights (-3.5% yellow excess)
+                # Gives natural, fresh Indian wedding skin tone (not muddy or yellow-tinged)
+                yellow_excess = np.clip((img[:, :, 1] - img[:, :, 2]) / 255.0, 0.0, 1.0)
+                blue_fill = yellow_excess * 0.035 * skin_f * roll_off * 255.0
 
-                img *= scale[:, :, np.newaxis]
-                del scale
+                img[:, :, 0] += skin_white_lift * 0.35
+                img[:, :, 1] += skin_white_lift * 0.35
+                img[:, :, 2] += skin_white_lift * 0.30 + blue_fill
+                del Y_skin, roll_off, skin_white_lift, yellow_excess, blue_fill
                 np.clip(img, 0.0, 255.0, out=img)
         except Exception:
             pass
@@ -671,7 +826,7 @@ def _lip_tint(img: np.ndarray) -> None:
     region[sel] = out[sel] * 255.0
 
 
-SKIN_LOCK_HUE_MAX = 50.0     # Lab hue above this reads yellow: the lock never restores more yellow than this
+SKIN_LOCK_HUE_MAX = 45.0     # Lab hue above this reads yellow: never lock skin to yellow hues
 SKIN_LOCK_HUE_MIN = 34.0     # below this skin reads pink / magenta
 SKIN_LOCK_CHROMA = 1.04      # a touch richer than the camera, so skin looks healthy, not grey
 
@@ -778,8 +933,13 @@ def _apply_skin_glow(img: np.ndarray, skin_mask: np.ndarray, strength: float) ->
 def render_preview(filepath: str, params: EditParameters, max_dim: int = 1200) -> np.ndarray:
     """
     Renders an adjusted preview of the image at intermediate resolution for instant UI inspection.
+    Uses eye-fixed base image if applied via AI Eye-Blink Fix.
     """
-    base_rgb = load_image(filepath, max_dim=max_dim)
+    source_to_load = filepath
+    eye_path = getattr(params, 'eye_fix_path', None)
+    if eye_path and os.path.exists(eye_path):
+        source_to_load = eye_path
+    base_rgb = load_image(source_to_load, max_dim=max_dim)
     return apply_edit_pipeline(base_rgb, params)
 
 def is_default_params(params: Optional[EditParameters]) -> bool:
@@ -804,6 +964,9 @@ def is_default_params(params: Optional[EditParameters]) -> bool:
             float(getattr(params, 'auto_blemish', 0.0) or 0.0) < 1.0 and
             float(getattr(params, 'dodge_burn', 0.0) or 0.0) < 1.0 and
             float(getattr(params, 'skin_glow', 0.0) or 0.0) < 1.0 and
+            float(getattr(params, 'ai_unblur', 0.0) or 0.0) < 1.0 and
+            float(getattr(params, 'jewelry_pop', 0.0) or 0.0) < 1.0 and
+            not getattr(params, 'eye_fix_path', None) and
             len(getattr(params, 'heal_spots', []) or []) == 0 and
             not (resolve_retouch_params(params) or {}).get("enabled", False) and
             wb_effective_gains(getattr(params, 'auto_wb', None)) is None
@@ -825,21 +988,26 @@ def export_photo(
     """
     os.makedirs(os.path.dirname(target_path), exist_ok=True)
 
+    actual_source = source_path
+    eye_path = getattr(params, 'eye_fix_path', None)
+    if eye_path and os.path.exists(eye_path):
+        actual_source = eye_path
+
     # 1. Ultra-fast pass-through for unedited photos
     if is_default_params(params):
-        src_ext = os.path.splitext(source_path)[1].lower()
+        src_ext = os.path.splitext(actual_source)[1].lower()
         if max_resolution is None and src_ext in ('.jpg', '.jpeg'):
             import shutil
-            shutil.copy2(source_path, target_path)
+            shutil.copy2(actual_source, target_path)
             return
 
         # Direct resize without filter chain
-        full_rgb = load_image(source_path, max_dim=max_resolution)
-        _write_jpeg(target_path, full_rgb, jpeg_quality, source_path)
+        full_rgb = load_image(actual_source, max_dim=max_resolution)
+        _write_jpeg(target_path, full_rgb, jpeg_quality, actual_source)
         return
 
     # 2. Photos with edits: apply accelerated pipeline
-    full_rgb = load_image(source_path, max_dim=max_resolution)
+    full_rgb = load_image(actual_source, max_dim=max_resolution)
     edited_rgb = apply_edit_pipeline(full_rgb, params)
     del full_rgb
 

@@ -4,7 +4,7 @@ import { api } from '../api';
 import {
   X, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, RotateCcw,
   Check, Star, Sparkles, Sliders, Info, Maximize, Minimize, AlertTriangle,
-  Bandage, Undo2
+  Bandage, Undo2, Hand, Eye
 } from 'lucide-react';
 
 interface LightboxModalProps {
@@ -17,6 +17,7 @@ interface LightboxModalProps {
   onUpdateRating: (photoId: number, rating: number) => void;
   previewTimestamp?: number;
   onUpdateEdits?: (photoId: number, params: EditParameters) => void;
+  onFixBlur?: (photoId: number) => void;
 }
 
 export const LightboxModal: React.FC<LightboxModalProps> = ({
@@ -29,8 +30,14 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
   onUpdateRating,
   previewTimestamp,
   onUpdateEdits,
+  onFixBlur,
 }) => {
   const [zoom, setZoom] = useState<number>(1);
+  const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [isPanning, setIsPanning] = useState<boolean>(false);
+  const startPanRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const startPointerRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
   const [showInfo, setShowInfo] = useState<boolean>(true);
   // Before / After slider (on by default in fullscreen): left of the handle = original, right = AI edit
   const [sliderOn, setSliderOn] = useState<boolean>(true);
@@ -42,10 +49,59 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
 
   const photo = photos[currentIndex];
 
+  const [isFixingEyes, setIsFixingEyes] = useState<boolean>(false);
+
+  const handleFixEyesLightbox = async () => {
+    if (!photo) return;
+    setIsFixingEyes(true);
+    try {
+      const res = await api.fixEyes(photo.id);
+      if (onUpdateEdits) {
+        onUpdateEdits(photo.id, {
+          ...(photo.edit_params || {
+            exposure: 0, temperature: 0, tint: 0, contrast: 0,
+            highlights: 0, shadows: 0, whites: 0, blacks: 0,
+            vibrance: 0, saturation: 0, sharpness: 30, noise_reduction: 10,
+            straighten: 0, preset_name: 'Pure Light (No Color Tone)'
+          }),
+          eye_fix_path: res.eye_fix_path
+        });
+      }
+    } catch (e: any) {
+      alert(e.message || 'Failed to fix closed eyes');
+    } finally {
+      setIsFixingEyes(false);
+    }
+  };
+
+  const handleRevertEyesLightbox = async () => {
+    if (!photo) return;
+    setIsFixingEyes(true);
+    try {
+      await api.revertEyes(photo.id);
+      if (onUpdateEdits) {
+        onUpdateEdits(photo.id, {
+          ...(photo.edit_params || {
+            exposure: 0, temperature: 0, tint: 0, contrast: 0,
+            highlights: 0, shadows: 0, whites: 0, blacks: 0,
+            vibrance: 0, saturation: 0, sharpness: 30, noise_reduction: 10,
+            straighten: 0, preset_name: 'Pure Light (No Color Tone)'
+          }),
+          eye_fix_path: null
+        });
+      }
+    } catch (e: any) {
+      alert(e.message || 'Failed to revert eyes');
+    } finally {
+      setIsFixingEyes(false);
+    }
+  };
+
   const handleNext = useCallback(() => {
     if (currentIndex < photos.length - 1) {
       onNavigate(currentIndex + 1);
       setZoom(1);
+      setPan({ x: 0, y: 0 });
       setImgLoaded(false);
     }
   }, [currentIndex, photos.length, onNavigate]);
@@ -54,6 +110,7 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
     if (currentIndex > 0) {
       onNavigate(currentIndex - 1);
       setZoom(1);
+      setPan({ x: 0, y: 0 });
       setImgLoaded(false);
     }
   }, [currentIndex, onNavigate]);
@@ -113,11 +170,25 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
   };
   const compareActive = sliderOn && !healActive;
 
-  // While dragging, follow the pointer anywhere on screen (fast drags / leaving the photo keep working)
+  // While dragging or panning, follow the pointer anywhere on screen
   useEffect(() => {
-    if (!dragging) return;
-    const onMove = (e: PointerEvent) => moveSplit(e.clientX);
-    const onUp = () => setDragging(false);
+    if (!dragging && !isPanning) return;
+    const onMove = (e: PointerEvent) => {
+      if (dragging) {
+        moveSplit(e.clientX);
+      } else if (isPanning) {
+        const dx = e.clientX - startPointerRef.current.x;
+        const dy = e.clientY - startPointerRef.current.y;
+        setPan({
+          x: startPanRef.current.x + dx,
+          y: startPanRef.current.y + dy
+        });
+      }
+    };
+    const onUp = () => {
+      setDragging(false);
+      setIsPanning(false);
+    };
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onUp);
@@ -126,7 +197,7 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
       window.removeEventListener('pointerup', onUp);
       window.removeEventListener('pointercancel', onUp);
     };
-  }, [dragging]);
+  }, [dragging, isPanning]);
 
   if (!isOpen || !photo) return null;
 
@@ -202,26 +273,136 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
             </button>
             {zoom !== 1 && (
               <button
-                onClick={() => setZoom(1)}
+                onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}
                 style={{ background: 'transparent', border: 'none', color: '#38bdf8', cursor: 'pointer', fontSize: '10px', marginLeft: '4px' }}
-                title="Reset zoom"
+                title="Reset zoom and pan"
               >
                 Reset
               </button>
             )}
+            {zoom > 1 && (
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: '3px',
+                  background: 'rgba(56, 189, 248, 0.16)',
+                  color: '#38bdf8',
+                  fontSize: '10px',
+                  padding: '2px 6px',
+                  borderRadius: '4px',
+                  fontWeight: 600,
+                  marginLeft: '4px'
+                }}
+                title="Hand Tool: Click & drag photo to pan up/down/left/right"
+              >
+                <Hand size={11} />
+                <span>Hand Tool</span>
+              </span>
+            )}
           </div>
 
-          {/* Before / After slider on / off */}
-          <button
-            onClick={() => { setHealActive(false); setSliderOn(!sliderOn); }}
-            className={`btn btn-sm ${compareActive ? 'btn-success' : 'btn-secondary'}`}
-            style={{ fontSize: '11px', padding: '4px 10px', fontWeight: 600, display: 'flex', alignItems: 'center', gap: '5px' }}
-            title={"Before / After slider on or off (Shortcut: \\)"}
-          >
-            <Sliders size={13} />
-            <span>{compareActive ? 'Before / After Slider: On' : 'Before / After Slider: Off'}</span>
-            <span style={{ fontSize: '9px', opacity: 0.7 }}>({'\\'})</span>
-          </button>
+          {/* AI Focus Recovery & Sharpness in Fullscreen */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '4px', background: '#1c202a', padding: '2px 4px', borderRadius: '6px' }}>
+            <button
+              onClick={() => {
+                if (onFixBlur) {
+                  onFixBlur(photo.id);
+                } else if (onUpdateEdits) {
+                  const current = photo.edit_params?.ai_unblur || 0;
+                  const newUnblur = current >= 50 ? 0 : 70;
+                  onUpdateEdits(photo.id, {
+                    ...(photo.edit_params || {
+                      exposure: 0, temperature: 0, tint: 0, contrast: 0,
+                      highlights: 0, shadows: 0, whites: 0, blacks: 0,
+                      vibrance: 0, saturation: 0, sharpness: 30, noise_reduction: 10,
+                      straighten: 0, preset_name: 'Pure Light (No Color Tone)'
+                    }),
+                    ai_unblur: newUnblur,
+                    sharpness: newUnblur > 0 ? Math.max(photo.edit_params?.sharpness || 30, 35) : (photo.edit_params?.sharpness || 30)
+                  });
+                }
+              }}
+              className={`btn btn-sm ${(photo.edit_params?.ai_unblur || 0) > 0 ? 'btn-success' : 'btn-secondary'}`}
+              style={{
+                fontSize: '11px',
+                padding: '4px 10px',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+                background: (photo.edit_params?.ai_unblur || 0) > 0 ? 'rgba(16, 185, 129, 0.25)' : undefined,
+                borderColor: (photo.edit_params?.ai_unblur || 0) > 0 ? '#10b981' : undefined,
+                color: (photo.edit_params?.ai_unblur || 0) > 0 ? '#34d399' : '#cbd5e1'
+              }}
+              title="1-Click AI Focus Recovery: Restores tack-sharp eyes, lashes & micro-details"
+            >
+              <Sparkles size={13} style={{ color: (photo.edit_params?.ai_unblur || 0) > 0 ? '#34d399' : '#38bdf8' }} />
+              <span>
+                {(photo.edit_params?.ai_unblur || 0) > 0
+                  ? `AI Focus: Sharp (${photo.edit_params?.ai_unblur || 70}%)`
+                  : 'AI Focus Recovery'}
+              </span>
+            </button>
+
+            {/* Quick Sharpness / Unblur adjuster when active */}
+            {(photo.edit_params?.ai_unblur || 0) > 0 && onUpdateEdits && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '4px', padding: '0 6px' }}>
+                <span style={{ fontSize: '10px', color: '#94a3b8' }}>Strength:</span>
+                <input
+                  type="range"
+                  min="30"
+                  max="100"
+                  step="5"
+                  value={photo.edit_params?.ai_unblur || 70}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value);
+                    onUpdateEdits(photo.id, {
+                      ...(photo.edit_params || {
+                        exposure: 0, temperature: 0, tint: 0, contrast: 0,
+                        highlights: 0, shadows: 0, whites: 0, blacks: 0,
+                        vibrance: 0, saturation: 0, sharpness: 30, noise_reduction: 10,
+                        straighten: 0, preset_name: 'Pure Light (No Color Tone)'
+                      }),
+                      ai_unblur: val
+                    });
+                  }}
+                  style={{ width: '60px', height: '3px', accentColor: '#34d399', cursor: 'pointer' }}
+                  title="Adjust AI Focus & Sharpness strength"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* AI Eye-Blink Fix in Fullscreen */}
+          {(photo.eyes_status !== 'OPEN' || photo.edit_params?.eye_fix_path || photo.duplicate_group_id) && (
+            <button
+              onClick={photo.edit_params?.eye_fix_path ? handleRevertEyesLightbox : handleFixEyesLightbox}
+              disabled={isFixingEyes}
+              className={`btn btn-sm ${photo.edit_params?.eye_fix_path ? 'btn-success' : 'btn-secondary'}`}
+              style={{
+                fontSize: '11px',
+                padding: '4px 10px',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+                background: photo.edit_params?.eye_fix_path ? 'rgba(16, 185, 129, 0.25)' : undefined,
+                borderColor: photo.edit_params?.eye_fix_path ? '#10b981' : undefined,
+                color: photo.edit_params?.eye_fix_path ? '#34d399' : '#cbd5e1'
+              }}
+              title="AI Eye-Blink Fix: Auto-swaps closed eyes with open eyes from matching burst shot"
+            >
+              <Eye size={13} style={{ color: photo.edit_params?.eye_fix_path ? '#34d399' : '#f87171' }} />
+              <span>
+                {isFixingEyes
+                  ? 'Fixing Eyes...'
+                  : photo.edit_params?.eye_fix_path
+                  ? '✓ Eyes Fixed (Revert)'
+                  : '👁️ Fix Closed Eyes'}
+              </span>
+            </button>
+          )}
 
           {/* Heal Brush Button */}
           {onUpdateEdits && (
@@ -360,12 +541,60 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
         <div
           ref={stageRef}
           className={`lb-stage ${dragging ? 'is-dragging' : ''}`}
-          style={{ transform: `scale(${zoom})`, transition: zoom === 1 ? 'transform 0.15s ease' : 'none' }}
+          style={{
+            transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+            transition: isPanning || dragging ? 'none' : zoom === 1 ? 'transform 0.15s ease' : 'none',
+            cursor: healActive
+              ? 'crosshair'
+              : isPanning
+              ? 'grabbing'
+              : zoom > 1
+              ? 'grab'
+              : compareActive
+              ? 'ew-resize'
+              : 'default'
+          }}
+          onWheel={(e) => {
+            if (zoom > 1) {
+              e.preventDefault();
+              setPan(prev => ({
+                x: prev.x - e.deltaX * 1.1,
+                y: prev.y - e.deltaY * 1.1
+              }));
+            }
+          }}
+          onDoubleClick={(e) => {
+            if (healActive) return;
+            if (zoom === 1) {
+              setZoom(2);
+            } else {
+              setZoom(1);
+              setPan({ x: 0, y: 0 });
+            }
+          }}
           onPointerDown={(e) => {
-            if (!compareActive || e.button !== 0) return;
-            e.preventDefault();
-            setDragging(true);
-            moveSplit(e.clientX);
+            if (e.button !== 0 || healActive) return;
+
+            const el = stageRef.current;
+            if (!el) return;
+            const r = el.getBoundingClientRect();
+            const dividerX = r.left + (splitPos / 100) * r.width;
+            const isNearDivider = compareActive && Math.abs(e.clientX - dividerX) <= 24;
+
+            if (isNearDivider) {
+              e.preventDefault();
+              setDragging(true);
+              moveSplit(e.clientX);
+            } else if (zoom > 1) {
+              e.preventDefault();
+              setIsPanning(true);
+              startPointerRef.current = { x: e.clientX, y: e.clientY };
+              startPanRef.current = { ...pan };
+            } else if (compareActive) {
+              e.preventDefault();
+              setDragging(true);
+              moveSplit(e.clientX);
+            }
           }}
         >
           <img
@@ -437,7 +666,7 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
           )}
         </div>
         {compareActive && imgLoaded && (
-          <div className="lb-hint">Drag the slider left / right to compare · {'\\'} to turn off</div>
+          <div className="lb-hint">Drag slider to compare · Drag photo to pan (Hand Tool) · Double-click to zoom · {'\\'} to toggle</div>
         )}
 
         {/* Floating AI Diagnostics Pill */}

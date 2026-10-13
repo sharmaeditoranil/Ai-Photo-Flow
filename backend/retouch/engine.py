@@ -135,7 +135,7 @@ def retouch_image(rgb: np.ndarray, retouch: Optional[Dict[str, Any]], want_masks
 
     sd = p["skinDetails"]
     if sd.get("enabled", True):
-        smooth_skin(lab, masks.skin, cfaces, sd)
+        smooth_skin(lab, masks.skin, cfaces, sd, orig_short_edge=min(H, W))
 
     im = p["imperfections"]
     if im.get("enabled", True):
