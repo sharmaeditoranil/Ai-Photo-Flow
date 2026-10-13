@@ -36,6 +36,27 @@ export const ExportModal: React.FC<ExportModalProps> = ({
   const [resolution, setResolution] = useState<'original' | '4k' | 'web' | 'social'>('original');
   const [renamePattern, setRenamePattern] = useState<string>('{original}_edited');
 
+  // Fresh client selected count state
+  const [currentClientCount, setCurrentClientCount] = useState<number>(clientSelectedCount);
+
+  useEffect(() => {
+    setCurrentClientCount(clientSelectedCount);
+  }, [clientSelectedCount]);
+
+  useEffect(() => {
+    if (isOpen && projectId) {
+      api.getProject(projectId).then(proj => {
+        if (proj?.counts) {
+          const freshCount = proj.counts.client_selected_count ?? 0;
+          setCurrentClientCount(freshCount);
+          if (activeCategory === 'CLIENT_SELECTED' || freshCount > 0) {
+            setIncludeClientSelected(true);
+          }
+        }
+      }).catch(() => {});
+    }
+  }, [isOpen, projectId, activeCategory]);
+
   // Category selections
   const [includeBest, setIncludeBest] = useState<boolean>(true);
   const [includeSelected, setIncludeSelected] = useState<boolean>(true);
@@ -437,7 +458,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                     checked={includeClientSelected}
                     onChange={(e) => setIncludeClientSelected(e.target.checked)}
                   />
-                  <span>❤️ Customer Selected ({clientSelectedCount})</span>
+                  <span>❤️ Customer Selected ({currentClientCount})</span>
                 </label>
 
                 <label style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: '#cbd5e1' }}>
@@ -475,7 +496,7 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                   <span style={{ fontSize: '18px' }}>📖</span>
                   <div>
                     <div style={{ fontSize: '13px', fontWeight: 700, color: '#f8fafc' }}>
-                      Client Album Design Files ({clientSelectedCount} photos)
+                      Client Album Design Files ({currentClientCount} photos)
                     </div>
                     <div style={{ fontSize: '11px', color: '#94a3b8' }}>
                       Copy uncompressed original camera RAW / high-res files into a separate <code>/Client_Album_Selection</code> folder.
@@ -485,21 +506,21 @@ export const ExportModal: React.FC<ExportModalProps> = ({
                 <button
                   type="button"
                   onClick={handleExportClientAlbumOriginals}
-                  disabled={isCopyingAlbum || clientSelectedCount === 0}
+                  disabled={isCopyingAlbum || currentClientCount === 0}
                   className="btn"
                   style={{
-                    background: clientSelectedCount > 0 ? 'linear-gradient(135deg, #e11d48, #be123c)' : '#1e293b',
+                    background: currentClientCount > 0 ? 'linear-gradient(135deg, #e11d48, #be123c)' : '#1e293b',
                     color: '#ffffff',
                     border: 'none',
                     padding: '7px 12px',
                     borderRadius: '6px',
                     fontSize: '11px',
                     fontWeight: 700,
-                    cursor: (isCopyingAlbum || clientSelectedCount === 0) ? 'not-allowed' : 'pointer',
+                    cursor: (isCopyingAlbum || currentClientCount === 0) ? 'not-allowed' : 'pointer',
                     display: 'flex',
                     alignItems: 'center',
                     gap: '6px',
-                    boxShadow: clientSelectedCount > 0 ? '0 2px 10px rgba(225, 29, 72, 0.4)' : 'none'
+                    boxShadow: currentClientCount > 0 ? '0 2px 10px rgba(225, 29, 72, 0.4)' : 'none'
                   }}
                   title="Copies original camera RAW/JPG files into separate folder without recompression"
                 >

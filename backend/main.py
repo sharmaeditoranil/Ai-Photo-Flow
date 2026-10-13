@@ -286,6 +286,12 @@ def list_projects():
 
 @app.get("/api/projects/{project_id}")
 def get_project_details(project_id: int):
+    # Pull any latest client selections from hosting
+    try:
+        proofing_service._pull_hosted_selections(project_id=project_id)
+    except Exception:
+        pass
+
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM projects WHERE id = ?", (project_id,))
@@ -295,6 +301,19 @@ def get_project_details(project_id: int):
         raise HTTPException(status_code=404, detail="Project not found")
 
     p_dict = dict(project)
+
+    # Synchronize client selections between client_gallery_photos and photos table
+    try:
+        cursor.execute("""
+            UPDATE photos SET client_selection = 'SELECTED'
+            WHERE project_id = ? AND id IN (
+                SELECT photo_id FROM client_gallery_photos
+                WHERE client_selection = 'SELECTED'
+            ) AND COALESCE(client_selection, '') != 'SELECTED'
+        """, (project_id,))
+        conn.commit()
+    except Exception:
+        pass
 
     # Calculate category counts
     cursor.execute("""
@@ -307,7 +326,13 @@ def get_project_details(project_id: int):
         COUNT(DISTINCT duplicate_group_id) as similar_groups_count,
         SUM(CASE WHEN (user_selection = 'UNRATED' AND ai_recommendation = 'SIMILAR') THEN 1 ELSE 0 END) as similar_count,
         SUM(CASE WHEN is_edited = 1 THEN 1 ELSE 0 END) as edited_count,
-        SUM(CASE WHEN client_selection = 'SELECTED' THEN 1 ELSE 0 END) as client_selected_count
+        SUM(CASE WHEN (
+            COALESCE(client_selection, '') = 'SELECTED'
+            OR id IN (
+                SELECT photo_id FROM client_gallery_photos
+                WHERE client_selection = 'SELECTED'
+            )
+        ) THEN 1 ELSE 0 END) as client_selected_count
     FROM photos WHERE project_id = ?
     """, (project_id,))
     counts = dict(cursor.fetchone())
@@ -387,7 +412,17 @@ def list_photos(
         )"""
         params.append(project_id)
     elif category == "CLIENT_SELECTED":
-        query += " AND client_selection = 'SELECTED'"
+        try:
+            proofing_service._pull_hosted_selections(project_id=project_id)
+        except Exception:
+            pass
+        query += """ AND (
+            COALESCE(photos.client_selection, '') = 'SELECTED'
+            OR photos.id IN (
+                SELECT photo_id FROM client_gallery_photos
+                WHERE client_selection = 'SELECTED'
+            )
+        )"""
 
     if isinstance(star_rating, int) and star_rating > 0:
         query += " AND star_rating = ?"

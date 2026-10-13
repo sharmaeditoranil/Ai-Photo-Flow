@@ -57,21 +57,40 @@ export const TopBar: React.FC<TopBarProps> = ({
 
   const noProject = !currentProject;
   const busy = !!isJobRunning;
-  const planLabel =
-    license && !license.is_active
-      ? ((license as any).status === 'OFFLINE' ? 'Go online to verify' : 'Activate License')
-      : license?.is_vip
-      ? 'VIP Lifetime'
-      : license?.plan === 'PRO'
-      ? 'Pro'
-      : license?.plan === 'STUDIO'
-      ? 'Studio'
-      : (license?.days_left ?? 0) >= 1
-      ? `Trial · ${license?.days_left}d left`
-      : `Trial · ${(license as any)?.hours_left ?? 0}h left`;
-  const planTone = license && !license.is_active
-    ? 'warn'
-    : license?.is_vip ? 'vip' : (license?.plan === 'PRO' || license?.plan === 'STUDIO') ? 'pro' : 'warn';
+  const isVip = !!(license?.is_vip || license?.plan === 'VIP_LIFETIME');
+  const isPro = license?.plan === 'PRO';
+  const isStudio = license?.plan === 'STUDIO';
+  const isActive = !!license?.is_active;
+
+  let planLabel = 'Checking plan...';
+  let planTone: 'vip' | 'pro' | 'warn' = 'warn';
+
+  if (!license) {
+    planLabel = 'Checking plan...';
+    planTone = 'warn';
+  } else if (!isActive) {
+    planLabel = (license as any).status === 'OFFLINE' ? 'Go online to verify' : 'Activate License';
+    planTone = 'warn';
+  } else if (isVip) {
+    planLabel = 'VIP Lifetime';
+    planTone = 'vip';
+  } else if (isStudio) {
+    planLabel = 'Studio';
+    planTone = 'pro';
+  } else if (isPro) {
+    planLabel = 'Pro';
+    planTone = 'pro';
+  } else if (license?.plan === 'FREE_TRIAL' || !license?.plan) {
+    if ((license?.days_left ?? 0) >= 1) {
+      planLabel = `Trial · ${license?.days_left}d left`;
+    } else {
+      planLabel = `Trial · ${(license as any)?.hours_left ?? 0}h left`;
+    }
+    planTone = 'warn';
+  } else {
+    planLabel = `${license.plan} Active`;
+    planTone = 'pro';
+  }
 
   return (
     <header className="window-drag-region tb">

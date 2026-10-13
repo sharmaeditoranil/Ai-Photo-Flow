@@ -31,7 +31,11 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({ isOpen, onClose, onO
         const lic = await api.refreshLicense();
         if (onLicenseUpdated) onLicenseUpdated(lic);
       }
-      setProfile(await api.getLicenseProfile());
+      const data = await api.getLicenseProfile();
+      setProfile(data);
+      if (onLicenseUpdated && data?.status) {
+        onLicenseUpdated(data.status);
+      }
     } catch (e: any) {
       setMessage({ text: e.message || 'Could not load profile', ok: false });
     } finally {

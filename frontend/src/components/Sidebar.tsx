@@ -80,10 +80,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 </div>
                 <span style={{
                   fontSize: '11px',
-                  background: isSelected ? 'rgba(59, 130, 246, 0.25)' : '#1e222b',
-                  color: isSelected ? '#93c5fd' : '#94a3b8',
+                  background: isSelected
+                    ? 'rgba(59, 130, 246, 0.25)'
+                    : c.id === 'CLIENT_SELECTED' && Number(c.count) > 0
+                    ? 'rgba(244, 63, 94, 0.2)'
+                    : '#1e222b',
+                  color: isSelected
+                    ? '#93c5fd'
+                    : c.id === 'CLIENT_SELECTED' && Number(c.count) > 0
+                    ? '#fb7185'
+                    : '#94a3b8',
                   padding: '1px 6px',
                   borderRadius: '10px',
+                  fontWeight: c.id === 'CLIENT_SELECTED' && Number(c.count) > 0 ? 700 : 500,
                   fontVariantNumeric: 'tabular-nums'
                 }}>
                   {c.count}

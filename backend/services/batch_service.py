@@ -454,14 +454,35 @@ class BatchManager:
         Exports selected photos into subfolders: /AI-Selected, /AI-Edited, /Rejected.
         Never overwrites original files.
         """
+        # Pull any latest client selections from hosting before export
+        try:
+            from backend.services.proofing_service import proofing_service
+            proofing_service._pull_hosted_selections(project_id=project_id)
+        except Exception:
+            pass
+
         conn = get_connection()
         cursor = conn.cursor()
+
+        # Synchronize client selections into photos table
+        try:
+            cursor.execute("""
+                UPDATE photos SET client_selection = 'SELECTED'
+                WHERE project_id = ? AND id IN (
+                    SELECT photo_id FROM client_gallery_photos
+                    WHERE client_selection = 'SELECTED'
+                ) AND COALESCE(client_selection, '') != 'SELECTED'
+            """, (project_id,))
+            conn.commit()
+        except Exception:
+            pass
 
         # Query photos to export (including client_selection from photos or client_gallery_photos)
         cursor.execute("""
         SELECT p.id, p.filename, p.file_path, p.ai_recommendation, p.user_selection, p.edit_params, p.is_edited, p.width, p.height,
                COALESCE(NULLIF(p.client_selection, ''), gp.client_selection, 'UNRATED') as client_selection,
-               COALESCE(NULLIF(p.client_note, ''), gp.client_note, '') as client_note
+               COALESCE(NULLIF(p.client_note, ''), gp.client_note, '') as client_note,
+               (CASE WHEN gp.client_selection = 'SELECTED' THEN 1 ELSE 0 END) as gp_selected
         FROM photos p
         LEFT JOIN (
             SELECT photo_id, client_selection, client_note
@@ -481,7 +502,7 @@ class BatchManager:
         export_queue = []
         for p in all_photos:
             effective_choice = p["user_selection"] if p["user_selection"] != "UNRATED" else p["ai_recommendation"]
-            is_client_selected = (p.get("client_selection") or "").upper() == "SELECTED"
+            is_client_selected = (p.get("client_selection") or "").upper() == "SELECTED" or p.get("gp_selected") == 1
             
             if "CLIENT_SELECTED" in categories and is_client_selected:
                 export_queue.append((p, "CLIENT_SELECTED"))

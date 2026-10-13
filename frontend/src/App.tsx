@@ -139,7 +139,24 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     loadProjects();
-  }, []);
+    loadLicense();
+    const t1 = setTimeout(loadLicense, 1500);
+    const t2 = setTimeout(loadLicense, 4000);
+    const onFocus = () => {
+      loadLicense();
+      if (currentProject) {
+        api.getProject(currentProject.id).then(updated => {
+          if (updated) setCurrentProject(updated);
+        }).catch(() => {});
+      }
+    };
+    window.addEventListener('focus', onFocus);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+      window.removeEventListener('focus', onFocus);
+    };
+  }, [currentProject?.id]);
 
   // 2. Poll Active Batch Job if running
   useEffect(() => {
@@ -455,7 +472,14 @@ export const App: React.FC = () => {
         onOpenProfile={() => setIsProfileOpen(true)}
         onSelectProject={(id) => loadProjectDetails(id)}
         onOpenImport={() => setIsImportOpen(true)}
-        onOpenExport={() => setIsExportOpen(true)}
+        onOpenExport={() => {
+          if (currentProject) {
+            api.getProject(currentProject.id).then(updated => {
+              if (updated) setCurrentProject(updated);
+            }).catch(() => {});
+          }
+          setIsExportOpen(true);
+        }}
         onOpenShareProofing={() => setIsShareProofingOpen(true)}
         onOpenBatchProgress={() => setIsBatchProgressOpen(true)}
         onOpenLogs={() => setIsLogsOpen(true)}
@@ -477,7 +501,12 @@ export const App: React.FC = () => {
           currentCategory={currentCategory}
           onSelectCategory={(cat) => {
             setCurrentCategory(cat);
-            if (currentProject) loadPhotos(currentProject.id, cat, photoFiltersRef.current.stars, photoFiltersRef.current.scene, photoFiltersRef.current.sort);
+            if (currentProject) {
+              loadPhotos(currentProject.id, cat, photoFiltersRef.current.stars, photoFiltersRef.current.scene, photoFiltersRef.current.sort);
+              api.getProject(currentProject.id).then(updated => {
+                if (updated) setCurrentProject(updated);
+              }).catch(() => {});
+            }
           }}
           selectedStar={selectedStar}
           onSelectStar={(stars) => {
@@ -583,7 +612,12 @@ export const App: React.FC = () => {
 
       <ShareProofingModal
         isOpen={isShareProofingOpen}
-        onClose={() => setIsShareProofingOpen(false)}
+        onClose={() => {
+          setIsShareProofingOpen(false);
+          if (currentProject) {
+            loadProjectDetails(currentProject.id);
+          }
+        }}
         project={currentProject}
         photos={photos}
         onRefreshProject={() => {
