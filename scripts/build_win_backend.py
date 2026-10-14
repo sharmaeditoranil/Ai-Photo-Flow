@@ -69,7 +69,10 @@ def main() -> None:
     left = [os.path.join(f, n) for f, _, ns in os.walk(DST) for n in ns if n.endswith(".py")]
     if left:
         sys.exit(f"Source files left in the Windows bundle: {left[:3]}")
-    print(f"  Windows backend: {len(jobs)} modules compiled (no source), {copied} data files copied")
+
+    # Ensure backend_entry.py is copied to root of dist-backend-win
+    shutil.copy2(os.path.join(ROOT, "backend_entry.py"), os.path.join(ROOT, "dist-backend-win", "backend_entry.py"))
+    print(f"  Windows backend: {len(jobs)} modules compiled (no source), {copied} data files copied, backend_entry.py included")
 
 
 if __name__ == "__main__":
