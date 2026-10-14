@@ -20,8 +20,9 @@ if sys.platform == "win32":
     py_dir = os.path.join(base_dir, "python")
     cv2_dir = os.path.join(site_packages, "cv2")
     rawpy_dir = os.path.join(site_packages, "rawpy")
+    ort_dir = os.path.join(site_packages, "onnxruntime", "capi")
 
-    for d in [numpy_libs, py_dir, site_packages, cv2_dir, rawpy_dir]:
+    for d in [numpy_libs, py_dir, site_packages, cv2_dir, rawpy_dir, ort_dir]:
         if d and os.path.isdir(d):
             if hasattr(os, "add_dll_directory"):
                 try:
