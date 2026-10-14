@@ -84,6 +84,10 @@ def on_app_startup():
         """)
         conn.commit()
         conn.close()
+        try:
+            proofing_service.purge_expired_galleries()
+        except Exception:
+            pass
     except Exception as e:
         print(f"Startup batch cleanup note: {e}")
 
@@ -1262,6 +1266,10 @@ def create_client_gallery(req: CreateGalleryRequest):
 
 @app.get("/api/proofing/galleries/{project_id}")
 def list_client_galleries(project_id: int):
+    try:
+        proofing_service.purge_expired_galleries()
+    except Exception:
+        pass
     return proofing_service.list_project_galleries(project_id)
 
 @app.get("/gallery/{gallery_uuid}", response_class=HTMLResponse)
