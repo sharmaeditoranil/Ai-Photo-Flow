@@ -92,10 +92,6 @@ export const AutoEditModal: React.FC<AutoEditModalProps> = ({
     }
   };
 
-  if (!isOpen) return null;
-
-  const currentPresetInfo = WEDDING_PRESETS.find(p => p.id === selectedPreset) || WEDDING_PRESETS[0];
-
   const effectiveFolder = selectedFolder || availableFolders[0]?.name || '';
 
   const countToEdit = useMemo(() => {
@@ -106,6 +102,10 @@ export const AutoEditModal: React.FC<AutoEditModalProps> = ({
     }
     return totalCount;
   }, [scope, bestCount, selectedCount, availableFolders, effectiveFolder, totalCount]);
+
+  if (!isOpen) return null;
+
+  const currentPresetInfo = WEDDING_PRESETS.find(p => p.id === selectedPreset) || WEDDING_PRESETS[0];
 
   const handleStart = () => {
     let targetIds: number[] | undefined = undefined;

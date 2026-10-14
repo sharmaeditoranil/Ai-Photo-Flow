@@ -648,17 +648,19 @@ export const App: React.FC = () => {
         }}
       />
 
-      <AutoEditModal
-        isOpen={isAutoEditModalOpen}
-        onClose={() => setIsAutoEditModalOpen(false)}
-        photos={photos}
-        selectedPhotoIds={selectedPhotoIds}
-        samplePhotoId={selectedPhoto?.id || (photos.length > 0 ? photos[0].id : undefined)}
-        onStartAutoEdit={(presetName, targetIds) => {
-          setIsAutoEditModalOpen(false);
-          handleStartAutoEditWithTarget(presetName, targetIds);
-        }}
-      />
+      {isAutoEditModalOpen && (
+        <AutoEditModal
+          isOpen={isAutoEditModalOpen}
+          onClose={() => setIsAutoEditModalOpen(false)}
+          photos={photos}
+          selectedPhotoIds={selectedPhotoIds}
+          samplePhotoId={selectedPhoto?.id || (photos.length > 0 ? photos[0].id : undefined)}
+          onStartAutoEdit={(presetName, targetIds) => {
+            setIsAutoEditModalOpen(false);
+            handleStartAutoEditWithTarget(presetName, targetIds);
+          }}
+        />
+      )}
 
       <BatchProgressModal
         isOpen={isBatchProgressOpen}
