@@ -110,7 +110,13 @@ class EditParametersRequest(BaseModel):
     auto_blemish: float = 0.0
     skin_smoothing: float = 0.0
     dodge_burn: float = 0.0
+    skin_glow: float = 0.0
     ai_unblur: float = 0.0
+    jewelry_pop: float = 0.0
+    teeth_whitening: float = 0.0
+    eye_sparkle: float = 0.0
+    lip_enhancement: float = 0.0
+    radial_falloff: float = 0.0
     heal_opacity: float = 100.0
     heal_face_preset: str = "AUTO"
     heal_spots: Optional[List[Dict[str, float]]] = []
@@ -163,7 +169,13 @@ DEFAULT_EDIT_PARAMS = {
     "auto_blemish": 0.0,
     "skin_smoothing": 0.0,
     "dodge_burn": 0.0,
+    "skin_glow": 0.0,
     "ai_unblur": 0.0,
+    "jewelry_pop": 0.0,
+    "teeth_whitening": 0.0,
+    "eye_sparkle": 0.0,
+    "lip_enhancement": 0.0,
+    "radial_falloff": 0.0,
     "heal_spots": [],
     "retouch": None,
     "auto_wb": None

@@ -63,6 +63,10 @@ class EditParameters:
     skin_glow: float = 0.0     # 0 to 100 (soft radiant glow on real skin only; the rest of the photo is untouched)
     ai_unblur: float = 0.0     # 0 to 100 (AI Motion & Focus Deblur: restores tack-sharp eyes & facial features)
     jewelry_pop: float = 0.0   # 0 to 100 (Jewelry Sparkle & Bridal Attire Texture Pop)
+    teeth_whitening: float = 0.0 # 0 to 100 (AI Teeth Whitening & Smile Brightener)
+    eye_sparkle: float = 0.0   # 0 to 100 (AI Eye Catchlight & Sclera Cleanser)
+    lip_enhancement: float = 0.0 # 0 to 100 (AI Lip Color & Definition Pop)
+    radial_falloff: float = 0.0 # 0 to 100 (Subject-Centered Cinematic Radial Falloff)
     eye_fix_path: Optional[str] = None # Path to eye-blink fixed base image if applied
     heal_spots: List[Dict[str, float]] = field(default_factory=list) # [{'x': 0.5, 'y': 0.4, 'radius': 0.015}]
     retouch: Optional[Dict[str, Any]] = None # AI Skin Retouch block (backend/retouch/params.py schema)
@@ -93,6 +97,10 @@ class EditParameters:
             "skin_glow": self.skin_glow,
             "ai_unblur": self.ai_unblur,
             "jewelry_pop": self.jewelry_pop,
+            "teeth_whitening": self.teeth_whitening,
+            "eye_sparkle": self.eye_sparkle,
+            "lip_enhancement": self.lip_enhancement,
+            "radial_falloff": self.radial_falloff,
             "eye_fix_path": self.eye_fix_path,
             "heal_spots": self.heal_spots,
             "retouch": self.retouch,
@@ -125,6 +133,10 @@ class EditParameters:
             skin_glow=float(data.get("skin_glow", 0.0) or 0.0),
             ai_unblur=float(data.get("ai_unblur", 0.0) or 0.0),
             jewelry_pop=float(data.get("jewelry_pop", 0.0) or 0.0),
+            teeth_whitening=float(data.get("teeth_whitening", 0.0) or 0.0),
+            eye_sparkle=float(data.get("eye_sparkle", 0.0) or 0.0),
+            lip_enhancement=float(data.get("lip_enhancement", 0.0) or 0.0),
+            radial_falloff=float(data.get("radial_falloff", 0.0) or 0.0),
             eye_fix_path=str(data.get("eye_fix_path")) if data.get("eye_fix_path") else None,
             heal_spots=list(data.get("heal_spots", []) or []),
             retouch=data.get("retouch") if isinstance(data.get("retouch"), dict) else None,

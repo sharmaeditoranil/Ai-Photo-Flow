@@ -81,6 +81,10 @@ export interface EditParameters {
   skin_glow?: number;
   ai_unblur?: number;
   jewelry_pop?: number;
+  teeth_whitening?: number;
+  eye_sparkle?: number;
+  lip_enhancement?: number;
+  radial_falloff?: number;
   eye_fix_path?: string | null;
   heal_spots?: HealSpot[];
   retouch?: RetouchParams | null;

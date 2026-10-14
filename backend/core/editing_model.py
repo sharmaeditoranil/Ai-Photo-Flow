@@ -589,11 +589,123 @@ class IndianWeddingEditingModel(EditingModel):
         sharpening = float(np.clip(sharpening * 1.05, 22.0, 48.0))
 
 
-        # Skin smoothing now lives in the AI Skin Retouch block (skin-mask gated, per-face scale);
-        # the engine skips photos without a detected face. Gentle 3D Dodge & Burn stays.
+        # AI Detection Rule 1: Skin Glow & Dodge/Burn
+        # Only active if human skin / faces are genuinely present in the photo
+        faces_n = int(subject_info.get("faces_count", 0))
+        has_real_skin = skin_info.get("has_skin", False) or faces_n > 0
+        if has_real_skin and subject_skin_ref is not None:
+            if subject_skin_ref > 160.0:
+                auto_skin_glow = 35.0
+            else:
+                auto_skin_glow = 65.0
+            auto_dodge_burn = 20.0
+        else:
+            auto_skin_glow = 0.0
+            auto_dodge_burn = 0.0
+
+        fm = face_metrics or subject_info.get("face_metrics")
+
+        # AI Detection Rule 2: Teeth Whitening & Smile Brightening
+        # Applies ONLY if photo has a face, mouth is open/smiling, and teeth are visible.
+        # If mouth is closed or lips shut, teeth whitening is strictly 0.0 to prevent lip edge bleaching.
+        auto_teeth_whitening = 0.0
+        if faces_n > 0:
+            if fm is not None and getattr(fm, 'has_emotion', False):
+                auto_teeth_whitening = 28.0
+            elif fm is not None and getattr(fm, 'bounding_boxes', None):
+                has_visible_teeth = False
+                for box in fm.bounding_boxes:
+                    bx, by, bw, bh = box["x"], box["y"], box["w"], box["h"]
+                    my0, my1 = int(by + bh * 0.62), int(by + bh * 0.92)
+                    mx0, mx1 = int(bx + bw * 0.25), int(bx + bw * 0.75)
+                    if 0 <= my0 < my1 <= gray.shape[0] and 0 <= mx0 < mx1 <= gray.shape[1]:
+                        mouth_patch = gray[my0:my1, mx0:mx1]
+                        if mouth_patch.size > 20 and float(np.percentile(mouth_patch, 90)) > 138.0:
+                            has_visible_teeth = True
+                            break
+                if has_visible_teeth:
+                    auto_teeth_whitening = 26.0
+
+        # AI Detection Rule 3: Eye Sparkle & Sclera Cleanser
+        # Applies ONLY if photo has a face and eyes are detected as OPEN.
+        # If eyes are CLOSED (blinking, looking down, sleeping), eye sparkle is strictly 0.0!
+        auto_eye_sparkle = 0.0
+        if faces_n > 0:
+            if fm is not None:
+                eyes_st = getattr(fm, 'eyes_status', 'NO_FACE')
+                if eyes_st in ('OPEN', 'PARTIAL'):
+                    auto_eye_sparkle = 24.0
+                else:
+                    auto_eye_sparkle = 0.0
+            else:
+                auto_eye_sparkle = 22.0
+
+        # AI Detection Rule 4: Lip Enhancement
+        # Applied to portraits with faces; scaled subtly for grooms and skipped for decor/macro.
+        auto_lip_enhancement = 0.0
+        if faces_n > 0:
+            if genre == "Solo Portrait & Makeup":
+                auto_lip_enhancement = 24.0
+            elif scene_group == "Groom Preparation":
+                auto_lip_enhancement = 8.0
+            else:
+                auto_lip_enhancement = 18.0
+
+        # AI Detection Rule 5: Jewelry & Attire Texture Pop
+        # Scans non-skin attire / decor areas for specular micro-reflections (diamonds, gold, zari, sequins).
+        # If photo is plain clothes / no jewelry, strictly 0.0 to prevent noisy grain!
+        auto_jewelry_pop = 0.0
+        if not is_pure_light:
+            non_skin_mask = (subject_mask > 0.20) & (~skin_in_subject) if has_subject_skin else (subject_mask > 0.20)
+            if np.any(non_skin_mask):
+                sample_lap = np.abs(cv2.Laplacian(gray, cv2.CV_32F))
+                specular_jewelry = (gray > 115) & (sample_lap > 18.0) & non_skin_mask
+                specular_count = int(np.sum(specular_jewelry))
+                total_sub_px = int(np.sum(non_skin_mask))
+                if total_sub_px > 100 and (specular_count / float(total_sub_px)) > 0.0010:
+                    auto_jewelry_pop = 34.0
+                elif genre == "Décor, Rituals & Macro Details":
+                    auto_jewelry_pop = 36.0
+                else:
+                    auto_jewelry_pop = 0.0
+            else:
+                auto_jewelry_pop = 0.0
+
+        # AI Detection Rule 6: Cinematic Radial Falloff (Vignette)
+        # Must ONLY apply if:
+        # 1) Background is NOT already dark
+        # 2) Not a wide family/stage group photo (>= 3 people)
+        # 3) No faces are positioned near the outer 12% frame edges
+        auto_radial_falloff = 0.0
+        if not is_dark_bg and genre != "Family & Stage Group" and faces_n <= 2:
+            face_near_edge = False
+            boxes = getattr(fm, 'bounding_boxes', []) if fm is not None else []
+            h_img, w_img = gray.shape[:2]
+            for b in boxes:
+                if (b["x"] < 0.12 * w_img or (b["x"] + b["w"]) > 0.88 * w_img or
+                    b["y"] < 0.10 * h_img or (b["y"] + b["h"]) > 0.90 * h_img):
+                    face_near_edge = True
+                    break
+            if not face_near_edge:
+                auto_radial_falloff = 10.0
+
+        # AI Detection Rule 7: AI Motion & Focus Deblur (Tack-Sharp Recovery)
+        # Automatically detects if the photo has focus softness or motion blur.
+        # If photo is already crisp & sharp, unblur is strictly 0.0 to avoid harsh edge ringing!
+        auto_ai_unblur = 0.0
+        face_sharp = getattr(fm, 'face_sharpness', -1.0) if fm is not None else -1.0
+        if face_sharp > 0:
+            if face_sharp < 54.0:
+                auto_ai_unblur = float(np.clip((62.0 - face_sharp) * 1.6, 20.0, 70.0))
+            else:
+                auto_ai_unblur = 0.0
+        else:
+            if lap_var < 85.0:
+                auto_ai_unblur = float(np.clip((95.0 - lap_var) * 0.65, 20.0, 60.0))
+            else:
+                auto_ai_unblur = 0.0
+
         auto_skin_smooth = 0.0
-        auto_dodge_burn = 20.0
-        auto_skin_glow = 65.0      # owner: "halka sa skin pe glow" - soft radiance on skin only
         retouch_block = build_retouch_preset(retouch_preset or "Natural")
 
         # AI Auto White Balance: grey-pixel / grey-edge / white-patch illuminant estimate,
@@ -654,6 +766,12 @@ class IndianWeddingEditingModel(EditingModel):
             skin_smoothing=round(auto_skin_smooth, 1),
             dodge_burn=round(auto_dodge_burn, 1),
             skin_glow=round(auto_skin_glow, 1),
+            jewelry_pop=round(auto_jewelry_pop, 1),
+            teeth_whitening=round(auto_teeth_whitening, 1),
+            eye_sparkle=round(auto_eye_sparkle, 1),
+            lip_enhancement=round(auto_lip_enhancement, 1),
+            radial_falloff=round(auto_radial_falloff, 1),
+            ai_unblur=round(auto_ai_unblur, 1),
             retouch=retouch_block,
             auto_wb=auto_wb
         )

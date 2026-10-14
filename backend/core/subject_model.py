@@ -128,7 +128,8 @@ class SubjectDetectionEngine:
             "is_wide_shot": is_wide,
             "subject_lum": round(sub_lum, 1),
             "bg_lum": round(bg_lum, 1),
-            "subject_coverage": round(coverage, 2)
+            "subject_coverage": round(coverage, 2),
+            "face_metrics": face_metrics
         }
 
         return mask, info

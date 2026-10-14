@@ -611,9 +611,11 @@ def apply_edit_pipeline(
             # Micro-detail extraction with 3x3 Laplacian on Luminance
             lap = cv2.Laplacian(L, cv2.CV_32F, ksize=3)
             # Specular luminance boost: jewelry and embroidery gleam at mid-to-high luminance
-            specular = np.clip((L - 110.0) / 70.0, 0.0, 1.0)
-            facet_detail = np.clip(lap * 0.48, -22.0, 22.0) * (0.60 + 0.40 * specular) * j_k
-            del lap, specular
+            # Gated so that flat/matte clothing does not receive artificial grain
+            specular = np.clip((L - 105.0) / 60.0, 0.0, 1.0)
+            facet_gate = np.clip((np.abs(lap) - 8.0) / 16.0, 0.0, 1.0)
+            facet_detail = np.clip(lap * 0.48, -20.0, 20.0) * specular * facet_gate * j_k
+            del lap, specular, facet_gate
 
             # Strict skin protection: do not add texture/noise back onto smoothed facial skin
             if retouch_skin is not None:
@@ -750,11 +752,35 @@ def apply_edit_pipeline(
         except Exception:
             pass
 
-    # 9.5. Lip colour: a very light chroma boost on lips that are clearly coloured (lipstick). Natural lips that
-    #      are close to the skin colour (usually men) get practically nothing.
-    if retouch_skin is not None and float(getattr(params, 'skin_glow', 0.0) or 0.0) > 0.5:
+    # 9.5. Lip colour & gloss enhancement
+    lip_str = float(getattr(params, 'lip_enhancement', 0.0) or 0.0)
+    if lip_str > 0.5 or (retouch_skin is not None and float(getattr(params, 'skin_glow', 0.0) or 0.0) > 0.5):
         try:
-            _lip_tint(img)
+            _lip_enhancement(img, lip_str)
+        except Exception:
+            pass
+
+    # 10. AI Teeth Whitening & Smile Brightening (दांतों की सफेदी)
+    teeth_w = float(getattr(params, 'teeth_whitening', 0.0) or 0.0)
+    if teeth_w > 0.5:
+        try:
+            _teeth_whitening(img, teeth_w)
+        except Exception:
+            pass
+
+    # 11. AI Eye Sparkle & Sclera Cleanser (आँखों की चमक व कैचलाइट)
+    eye_s = float(getattr(params, 'eye_sparkle', 0.0) or 0.0)
+    if eye_s > 0.5:
+        try:
+            _eye_sparkle(img, eye_s)
+        except Exception:
+            pass
+
+    # 12. Subject-Centered Cinematic Radial Falloff (सॉफ्ट विगनेट)
+    rad_f = float(getattr(params, 'radial_falloff', 0.0) or 0.0)
+    if rad_f > 0.5:
+        try:
+            _radial_falloff(img, rad_f, subject_info)
         except Exception:
             pass
 
@@ -762,16 +788,14 @@ def apply_edit_pipeline(
     return np.clip(img, 0, 255).astype(np.uint8)
 
 
-LIP_BOOST_MAX = 0.12          # at most +12% colour on lipstick lips
-LIP_EXCESS_START = 12.0       # lips must be this much more coloured than the cheeks (lipstick) before any boost;
-                              # natural lips (men, no make-up) measured 0-11 -> never touched
-LIP_EXCESS_FULL = 26.0        # full (still light) boost from here
+LIP_BOOST_MAX = 0.22          # up to +22% colour on lipstick lips at full strength
+LIP_EXCESS_START = 10.0       # lips must be this much more coloured than the cheeks (lipstick) before any boost
+LIP_EXCESS_FULL = 24.0        # full boost from here
 
 
-def _lip_tint(img: np.ndarray) -> None:
+def _lip_enhancement(img: np.ndarray, strength: float = 0.0) -> None:
     """In-place on float32 RGB 0..255. Per face: lip pixels = inside the lip ellipse AND clearly redder than that
-    face's cheeks (teeth, mouth interior and moustache excluded). Boost scales with how much more coloured the
-    lips are than the skin, so painted lips get a little richer and natural lips stay as they are."""
+    face's cheeks (teeth, mouth interior and moustache excluded). Boost scales with strength slider or subtle default."""
     from backend.retouch.faces import detect_faces
     from backend.retouch import geometry
     h, w = img.shape[:2]
@@ -782,6 +806,7 @@ def _lip_tint(img: np.ndarray) -> None:
     faces = detect_faces(small)
     if not faces:
         return
+    k_slider = float(np.clip(strength / 100.0, 0.0, 1.0)) if strength > 0.5 else 0.55
     lab_s = cv2.cvtColor(small, cv2.COLOR_RGB2LAB).astype(np.float32)
     a_s, b_s, L_s = lab_s[..., 1] - 128.0, lab_s[..., 2] - 128.0, lab_s[..., 0]
     weight_s = np.zeros((sh, sw), np.float32)
@@ -797,33 +822,241 @@ def _lip_tint(img: np.ndarray) -> None:
             continue
         sa, sb = float(np.median(a_s[cheek > 0])), float(np.median(b_s[cheek > 0]))
         skin_c = float(np.hypot(sa, sb))
-        sel = (lips > 0.5) & (a_s > sa + 4.0) & (L_s > 0.15 * 255) & (L_s < 0.92 * 255)
+        sel = (lips > 0.5) & (a_s > sa + 3.0) & (L_s > 0.15 * 255) & (L_s < 0.92 * 255)
         if int(sel.sum()) < 12:
             continue
         lip_c = float(np.median(np.hypot(a_s[sel], b_s[sel])))
         k = float(np.clip((lip_c - skin_c - LIP_EXCESS_START) / (LIP_EXCESS_FULL - LIP_EXCESS_START), 0.0, 1.0))
-        if k <= 0.0:
+        if k <= 0.0 and strength <= 0.5:
             continue
-        # per-pixel "lipness": how much redder than the cheeks, soft-edged and kept inside the lip ellipse
-        red = np.clip((a_s - sa - 4.0) / 10.0, 0.0, 1.0) * (L_s > 0.15 * 255) * (L_s < 0.92 * 255)
+        # Headroom guard: if lips are already deeply pigmented (e.g. bride dark red lipstick), prevent over-saturation
+        lip_headroom = float(np.clip((42.0 - lip_c) / 12.0, 0.20, 1.0))
+        eff_k = max(k, 0.45) * k_slider * lip_headroom
+        red = np.clip((a_s - sa - 3.0) / 10.0, 0.0, 1.0) * (L_s > 0.15 * 255) * (L_s < 0.92 * 255)
         wf = cv2.GaussianBlur(red.astype(np.float32) * cv2.GaussianBlur(lips, (0, 0), max(1.0, 0.04 * f.iod)), (0, 0), max(0.8, 0.02 * f.iod))
-        weight_s = np.maximum(weight_s, wf * k)
+        weight_s = np.maximum(weight_s, wf * eff_k)
     if float(weight_s.max()) < 0.02:
         return
     ys, xs = np.where(weight_s > 0.01)
     y0, y1, x0, x1 = int(ys.min()), int(ys.max()) + 1, int(xs.min()), int(xs.max()) + 1
-    # full-resolution region
     fx0, fx1, fy0, fy1 = int(x0 / s), min(w, int(x1 / s) + 1), int(y0 / s), min(h, int(y1 / s) + 1)
     wgt = cv2.resize(weight_s[y0:y1, x0:x1], (fx1 - fx0, fy1 - fy0), interpolation=cv2.INTER_LINEAR)
     region = img[fy0:fy1, fx0:fx1]
     lab = cv2.cvtColor(np.clip(region, 0, 255) / 255.0, cv2.COLOR_RGB2LAB)
-    gain = 1.0 + LIP_BOOST_MAX * wgt
+    gain = 1.0 + LIP_BOOST_MAX * wgt * k_slider
     lab[..., 1] *= gain
     lab[..., 2] *= gain
     out = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
     np.clip(out, 0.0, 1.0, out=out)
     sel = wgt > 0.002
     region[sel] = out[sel] * 255.0
+
+
+def _teeth_whitening(img: np.ndarray, strength: float) -> None:
+    """
+    In-place on float32 RGB 0..255.
+    Intelligent AI pre-detection: detects mouth area from face landmarks.
+    If mouth is closed (no visible teeth) or teeth are already white, the photo is untouched.
+    Only when teeth are genuinely visible and stained does it neutralize yellow tone and brighten clean enamel.
+    """
+    if strength <= 0.5:
+        return
+    from backend.retouch.faces import detect_faces
+    from backend.retouch import geometry
+    h, w = img.shape[:2]
+    s = min(1.0, 1200.0 / float(max(h, w)))
+    sw, sh = max(1, int(w * s)), max(1, int(h * s))
+    small = cv2.resize(np.clip(img, 0, 255).astype(np.uint8), (sw, sh), interpolation=cv2.INTER_AREA) if s < 1.0 \
+        else np.clip(img, 0, 255).astype(np.uint8)
+    faces = detect_faces(small)
+    if not faces:
+        return
+    k = float(np.clip(strength / 100.0, 0.0, 1.0))
+    lab_s = cv2.cvtColor(small, cv2.COLOR_RGB2LAB).astype(np.float32)
+    L_s, a_s, b_s = lab_s[..., 0], lab_s[..., 1] - 128.0, lab_s[..., 2] - 128.0
+
+    teeth_weight_s = np.zeros((sh, sw), np.float32)
+    for f in faces:
+        if f.estimated or f.iod < 16:
+            continue
+        mouth_mask = np.zeros((sh, sw), np.float32)
+        geometry.draw_lips(mouth_mask, f)
+        if int((mouth_mask > 0.5).sum()) < 8:
+            continue
+        l_gate = np.clip((L_s - 85.0) / 45.0, 0.0, 1.0)
+        lip_gate = np.clip((16.0 - a_s) / 10.0, 0.0, 1.0)
+        yellow_gate = np.clip((b_s - 2.0) / 12.0, 0.0, 1.0)
+        
+        teeth_candidate = mouth_mask * l_gate * lip_gate * (0.4 + 0.6 * yellow_gate)
+        # Pre-detection guard: if mouth is closed or lips shut together (< 14 candidate pixels), skip this face
+        if int((teeth_candidate > 0.25).sum()) < 14:
+            continue
+        blur_r = max(1.0, 0.03 * f.iod)
+        teeth_candidate = cv2.GaussianBlur(teeth_candidate, (0, 0), blur_r)
+        teeth_weight_s = np.maximum(teeth_weight_s, teeth_candidate)
+
+    if float(teeth_weight_s.max()) < 0.05 or int((teeth_weight_s > 0.15).sum()) < 16:
+        return
+
+    ys, xs = np.where(teeth_weight_s > 0.01)
+    y0, y1, x0, x1 = int(ys.min()), int(ys.max()) + 1, int(xs.min()), int(xs.max()) + 1
+    fx0, fx1, fy0, fy1 = int(x0 / s), min(w, int(x1 / s) + 1), int(y0 / s), min(h, int(y1 / s) + 1)
+    wgt = cv2.resize(teeth_weight_s[y0:y1, x0:x1], (fx1 - fx0, fy1 - fy0), interpolation=cv2.INTER_LINEAR)
+    
+    region = img[fy0:fy1, fx0:fx1]
+    lab_reg = cv2.cvtColor(np.clip(region, 0, 255).astype(np.uint8), cv2.COLOR_RGB2LAB).astype(np.float32)
+    
+    # Yellow stain pre-detection check: measure median yellow on teeth
+    teeth_mask = wgt > 0.15
+    if np.any(teeth_mask):
+        med_b = float(np.median(lab_reg[..., 2][teeth_mask] - 128.0))
+        # If teeth are already naturally white (b* <= 2.0), no yellow neutralization is required
+        yellow_need = float(np.clip((med_b - 1.5) / 10.0, 0.0, 1.0))
+    else:
+        yellow_need = 1.0
+
+    b_dev = lab_reg[..., 2] - 128.0
+    lab_reg[..., 2] -= b_dev * (0.80 * k * wgt * yellow_need)
+    a_dev = lab_reg[..., 1] - 128.0
+    lab_reg[..., 1] -= a_dev * (0.35 * k * wgt * yellow_need)
+    roll_off = np.clip((245.0 - lab_reg[..., 0]) / 60.0, 0.0, 1.0)
+    lab_reg[..., 0] += (10.0 + 6.0 * yellow_need) * k * wgt * roll_off
+    
+    np.clip(lab_reg[..., 0], 0.0, 255.0, out=lab_reg[..., 0])
+    out = cv2.cvtColor(lab_reg.astype(np.uint8), cv2.COLOR_LAB2RGB).astype(np.float32)
+    sel = wgt > 0.002
+    region[sel] = out[sel]
+
+
+def _eye_sparkle(img: np.ndarray, strength: float) -> None:
+    """
+    In-place on float32 RGB 0..255.
+    Intelligent AI pre-detection: brightens sclera and catchlight ONLY on open eyes.
+    If eyes are closed, blinking, or looking down, eyelids are completely protected and untouched.
+    """
+    if strength <= 0.5:
+        return
+    from backend.retouch.faces import detect_faces
+    h, w = img.shape[:2]
+    s = min(1.0, 1200.0 / float(max(h, w)))
+    sw, sh = max(1, int(w * s)), max(1, int(h * s))
+    small = cv2.resize(np.clip(img, 0, 255).astype(np.uint8), (sw, sh), interpolation=cv2.INTER_AREA) if s < 1.0 \
+        else np.clip(img, 0, 255).astype(np.uint8)
+    faces = detect_faces(small)
+    if not faces:
+        return
+    k = float(np.clip(strength / 100.0, 0.0, 1.0))
+    lab_s = cv2.cvtColor(small, cv2.COLOR_RGB2LAB).astype(np.float32)
+    L_s = lab_s[..., 0]
+
+    eye_weight_s = np.zeros((sh, sw), np.float32)
+    iris_weight_s = np.zeros((sh, sw), np.float32)
+
+    for f in faces:
+        if f.estimated or f.iod < 16:
+            continue
+        scale_x = sw / float(small.shape[1])
+        scale_y = sh / float(small.shape[0])
+        iod_s = f.iod * ((scale_x + scale_y) * 0.5)
+
+        for eye_pt in (f.landmarks[0], f.landmarks[1]):
+            ecx = float(eye_pt[0] * scale_x)
+            ecy = float(eye_pt[1] * scale_y)
+            ax = max(3, int(round(0.26 * iod_s)))
+            ay = max(2, int(round(0.15 * iod_s)))
+
+            single_eye = np.zeros((sh, sw), np.float32)
+            cv2.ellipse(single_eye, (int(round(ecx)), int(round(ecy))), (ax, ay), f.angle_deg, 0, 360, 1.0, -1, lineType=cv2.LINE_AA)
+            
+            sclera_gate = single_eye * np.clip((L_s - 95.0) / 40.0, 0.0, 1.0)
+            # Pre-detection guard: If eye is closed, blinking, or looking down, sclera_gate has few bright pixels
+            if int((sclera_gate > 0.35).sum()) < 8:
+                continue
+            eye_weight_s = np.maximum(eye_weight_s, sclera_gate)
+
+            single_iris = np.zeros((sh, sw), np.float32)
+            cv2.ellipse(single_iris, (int(round(ecx)), int(round(ecy))), (max(2, int(ax * 0.65)), max(2, int(ay * 0.85))), f.angle_deg, 0, 360, 1.0, -1, lineType=cv2.LINE_AA)
+            iris_weight_s = np.maximum(iris_weight_s, single_iris)
+
+    if float(eye_weight_s.max()) < 0.06 or int((eye_weight_s > 0.15).sum()) < 10:
+        return
+
+    total_wgt = np.maximum(eye_weight_s, iris_weight_s)
+    ys, xs = np.where(total_wgt > 0.01)
+    y0, y1, x0, x1 = int(ys.min()), int(ys.max()) + 1, int(xs.min()), int(xs.max()) + 1
+    fx0, fx1, fy0, fy1 = int(x0 / s), min(w, int(x1 / s) + 1), int(y0 / s), min(h, int(y1 / s) + 1)
+    
+    sclera_wgt = cv2.resize(eye_weight_s[y0:y1, x0:x1], (fx1 - fx0, fy1 - fy0), interpolation=cv2.INTER_LINEAR)
+    iris_wgt = cv2.resize(iris_weight_s[y0:y1, x0:x1], (fx1 - fx0, fy1 - fy0), interpolation=cv2.INTER_LINEAR)
+    
+    region = img[fy0:fy1, fx0:fx1]
+    lab_reg = cv2.cvtColor(np.clip(region, 0, 255).astype(np.uint8), cv2.COLOR_RGB2LAB).astype(np.float32)
+
+    a_dev = lab_reg[..., 1] - 128.0
+    b_dev = lab_reg[..., 2] - 128.0
+    lab_reg[..., 1] -= a_dev * (0.65 * k * sclera_wgt)
+    lab_reg[..., 2] -= b_dev * (0.65 * k * sclera_wgt)
+    lab_reg[..., 0] += 12.0 * k * sclera_wgt * np.clip((245.0 - lab_reg[..., 0]) / 50.0, 0.0, 1.0)
+
+    specular_eye = np.clip((lab_reg[..., 0] - 130.0) / 45.0, 0.0, 1.0)
+    lab_reg[..., 0] += 18.0 * k * iris_wgt * specular_eye * np.clip((250.0 - lab_reg[..., 0]) / 40.0, 0.0, 1.0)
+
+    np.clip(lab_reg[..., 0], 0.0, 255.0, out=lab_reg[..., 0])
+    out = cv2.cvtColor(lab_reg.astype(np.uint8), cv2.COLOR_LAB2RGB).astype(np.float32)
+    sel = (sclera_wgt > 0.002) | (iris_wgt > 0.002)
+    region[sel] = out[sel]
+
+
+def _radial_falloff(img: np.ndarray, strength: float, subject_info: Optional[Dict[str, Any]] = None) -> None:
+    """
+    In-place on float32 RGB 0..255.
+    Subject-centered cinematic radial falloff (soft luxury vignette).
+    Intelligent pre-detection: strictly skips dark backgrounds and wide group shots
+    so corners never clip black and guests near edges are never darkened.
+    """
+    if strength <= 0.5:
+        return
+    if subject_info:
+        bg_lum = float(subject_info.get("bg_lum", 100.0))
+        faces_count = int(subject_info.get("faces_count", 0))
+        is_wide = bool(subject_info.get("is_wide_shot", False))
+        if bg_lum < 55.0 or is_wide or faces_count >= 3:
+            return
+
+    h, w = img.shape[:2]
+    k = float(np.clip(strength / 100.0, 0.0, 1.0))
+    
+    cx, cy = w / 2.0, h / 2.0
+    if subject_info and subject_info.get("has_subject", False):
+        bbox = subject_info.get("subject_bbox")
+        if bbox:
+            cx = float(bbox[0] + bbox[2] / 2.0)
+            cy = float(bbox[1] + bbox[3] * 0.40)
+
+    max_d = float(np.hypot(max(cx, w - cx), max(cy, h - cy)))
+    if max_d < 10.0:
+        return
+
+    grid_w = 320
+    grid_h = max(1, int(320 * (h / float(w))))
+    scale_x = w / float(grid_w)
+    scale_y = h / float(grid_h)
+    
+    gcx = cx / scale_x
+    gcy = cy / scale_y
+    gmax_d = max_d / scale_x
+
+    y_coords, x_coords = np.mgrid[0:grid_h, 0:grid_w].astype(np.float32)
+    dist = np.hypot(x_coords - gcx, (y_coords - gcy) * (scale_x / scale_y)) / gmax_d
+    
+    falloff_small = np.clip((dist - 0.55) / 0.45, 0.0, 1.0)
+    falloff_small = falloff_small * falloff_small * (3.0 - 2.0 * falloff_small)
+    
+    falloff_map = cv2.resize(falloff_small, (w, h), interpolation=cv2.INTER_LINEAR)
+    
+    gain = 1.0 - (falloff_map * (k * 0.18))
+    img *= gain[:, :, np.newaxis]
+    np.clip(img, 0.0, 255.0, out=img)
 
 
 SKIN_LOCK_HUE_MAX = 45.0     # Lab hue above this reads yellow: never lock skin to yellow hues

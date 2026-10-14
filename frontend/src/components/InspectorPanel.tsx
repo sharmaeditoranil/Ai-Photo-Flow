@@ -72,6 +72,10 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
     skin_glow: 0,
     ai_unblur: 0,
     jewelry_pop: 0,
+    teeth_whitening: 0,
+    eye_sparkle: 0,
+    lip_enhancement: 0,
+    radial_falloff: 0,
     eye_fix_path: null,
     heal_spots: [],
     retouch: null,
@@ -1219,6 +1223,110 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
             value={edits.jewelry_pop ?? 0}
             onChange={(e) => handleSliderChange('jewelry_pop', parseFloat(e.target.value))}
             style={{ accentColor: '#fbbf24' }}
+          />
+        </div>
+
+        {/* AI Teeth Whitening (दांतों की सफेदी) */}
+        <div className="slider-group">
+          <div className="slider-header">
+            <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+              <span>Teeth Whitening (दांतों की सफेदी)</span>
+              {(edits.teeth_whitening ?? 0) > 0 && (
+                <span style={{ fontSize: '9px', padding: '1px 5px', background: '#38bdf822', color: '#38bdf8', borderRadius: '3px', fontWeight: 600 }}>
+                  WHITE {(edits.teeth_whitening ?? 0)}%
+                </span>
+              )}
+            </span>
+            <span className="slider-val" style={{ color: (edits.teeth_whitening ?? 0) > 0 ? '#38bdf8' : undefined }}>
+              {(edits.teeth_whitening ?? 0)}%
+            </span>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="1"
+            value={edits.teeth_whitening ?? 0}
+            onChange={(e) => handleSliderChange('teeth_whitening', parseFloat(e.target.value))}
+            style={{ accentColor: '#38bdf8' }}
+          />
+        </div>
+
+        {/* AI Eye Sparkle & Sclera (आँखों की चमक / आई ब्राइटनर) */}
+        <div className="slider-group">
+          <div className="slider-header">
+            <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+              <span>Eye Sparkle & Sclera (आँखों की चमक)</span>
+              {(edits.eye_sparkle ?? 0) > 0 && (
+                <span style={{ fontSize: '9px', padding: '1px 5px', background: '#06b6d422', color: '#22d3ee', borderRadius: '3px', fontWeight: 600 }}>
+                  SPARKLE {(edits.eye_sparkle ?? 0)}%
+                </span>
+              )}
+            </span>
+            <span className="slider-val" style={{ color: (edits.eye_sparkle ?? 0) > 0 ? '#22d3ee' : undefined }}>
+              {(edits.eye_sparkle ?? 0)}%
+            </span>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="1"
+            value={edits.eye_sparkle ?? 0}
+            onChange={(e) => handleSliderChange('eye_sparkle', parseFloat(e.target.value))}
+            style={{ accentColor: '#22d3ee' }}
+          />
+        </div>
+
+        {/* AI Lip Glow & Richness (नेचुरल लिप्स) */}
+        <div className="slider-group">
+          <div className="slider-header">
+            <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+              <span>Lip Glow & Richness (नेचुरल लिप्स)</span>
+              {(edits.lip_enhancement ?? 0) > 0 && (
+                <span style={{ fontSize: '9px', padding: '1px 5px', background: '#f43f5e22', color: '#fb7185', borderRadius: '3px', fontWeight: 600 }}>
+                  GLOSS {(edits.lip_enhancement ?? 0)}%
+                </span>
+              )}
+            </span>
+            <span className="slider-val" style={{ color: (edits.lip_enhancement ?? 0) > 0 ? '#fb7185' : undefined }}>
+              {(edits.lip_enhancement ?? 0)}%
+            </span>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="1"
+            value={edits.lip_enhancement ?? 0}
+            onChange={(e) => handleSliderChange('lip_enhancement', parseFloat(e.target.value))}
+            style={{ accentColor: '#fb7185' }}
+          />
+        </div>
+
+        {/* Cinematic Radial Focus (सब्जेक्ट विगनेट) */}
+        <div className="slider-group">
+          <div className="slider-header">
+            <span style={{ display: 'flex', alignItems: 'center', gap: '5px' }}>
+              <span>Cinematic Radial Focus (सॉफ्ट विगनेट)</span>
+              {(edits.radial_falloff ?? 0) > 0 && (
+                <span style={{ fontSize: '9px', padding: '1px 5px', background: '#a855f722', color: '#c084fc', borderRadius: '3px', fontWeight: 600 }}>
+                  FOCUS {(edits.radial_falloff ?? 0)}%
+                </span>
+              )}
+            </span>
+            <span className="slider-val" style={{ color: (edits.radial_falloff ?? 0) > 0 ? '#c084fc' : undefined }}>
+              {(edits.radial_falloff ?? 0)}%
+            </span>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="1"
+            value={edits.radial_falloff ?? 0}
+            onChange={(e) => handleSliderChange('radial_falloff', parseFloat(e.target.value))}
+            style={{ accentColor: '#c084fc' }}
           />
         </div>
 
