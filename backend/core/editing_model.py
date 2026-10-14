@@ -438,12 +438,12 @@ class IndianWeddingEditingModel(EditingModel):
             contrast = preset["contrast_bias"]
 
         # Whites & Blacks Anchor
-        # User requirement: "PIcture me White kam ho ja raha hai to white kam hone se pic dull dikh raha hai to aapko sirf halka sa white add karna hai, Edit ekdam Natural lage uska dhyan rakhiye."
+        # User requirement: "white me halka sa white add karna... Edit ekdam Natural lage uska dhyan rakhiye"
         if is_dark_bg:
-            whites = float(np.clip(3.5 + (244.0 - sub_p95) * 0.08, 1.0, 8.0))
+            whites = float(np.clip(4.5 + (244.0 - sub_p95) * 0.08, 1.5, 9.0))
             blacks = float(np.clip((sub_p5 - 10.0) * 0.20, -10.0, 5.0))
         else:
-            whites = float(np.clip(5.5 + (244.0 - sub_p95) * 0.10, 2.0, 14.0))
+            whites = float(np.clip(7.0 + (244.0 - sub_p95) * 0.10, 3.0, 15.0))
             blacks = float(np.clip((sub_p5 - 10.0) * 0.20, -12.0, 8.0))
 
         # 4. Color Balance Focused on the Subject

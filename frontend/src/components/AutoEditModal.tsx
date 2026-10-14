@@ -1,10 +1,11 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useMemo } from 'react';
 import {
   X, Wand2, Check, Sparkles, Sliders, Sun, Flame, Heart, Camera,
   Film, Palette, Zap, Eye, SplitSquareVertical, ArrowUpDown,
-  Maximize2, MoveVertical, ChevronLeft, ChevronRight
+  Maximize2, MoveVertical, ChevronLeft, ChevronRight, Folder, Star
 } from 'lucide-react';
 import { api } from '../api';
+import { Photo } from '../types';
 import { WEDDING_PRESETS } from '../presets';
 import type { PresetInfo } from '../presets';
 export { WEDDING_PRESETS };
@@ -13,22 +14,45 @@ export type { PresetInfo };
 interface AutoEditModalProps {
   isOpen: boolean;
   onClose: () => void;
-  selectedCount: number;
-  totalCount: number;
+  photos: Photo[];
+  selectedPhotoIds: number[];
   samplePhotoId?: number;
-  onStartAutoEdit: (presetName: string, scope: 'selected' | 'all') => void;
+  onStartAutoEdit: (presetName: string, targetPhotoIds?: number[]) => void;
 }
 
 export const AutoEditModal: React.FC<AutoEditModalProps> = ({
   isOpen,
   onClose,
-  selectedCount,
-  totalCount,
+  photos = [],
+  selectedPhotoIds = [],
   samplePhotoId,
   onStartAutoEdit
 }) => {
   const [selectedPreset, setSelectedPreset] = useState<string>('Pure Light (No Color Tone)');
-  const [scope, setScope] = useState<'selected' | 'all'>(selectedCount > 0 ? 'selected' : 'all');
+  const bestPhotos = useMemo(() => photos.filter(p => p.ai_recommendation === 'BEST'), [photos]);
+  const bestCount = bestPhotos.length;
+  const totalCount = photos.length;
+  const selectedCount = selectedPhotoIds.length;
+
+  const availableFolders = useMemo(() => {
+    const map = new Map<string, number>();
+    photos.forEach(p => {
+      const parts = (p.file_path || '').replace(/\\/g, '/').split('/');
+      if (parts.length > 2) {
+        const sub = parts[parts.length - 2];
+        if (sub && !['photos', 'images', 'dcim', 'raw'].includes(sub.toLowerCase())) {
+          map.set(`Folder: ${sub}`, (map.get(`Folder: ${sub}`) || 0) + 1);
+        }
+      }
+      if (p.scene_category) {
+        map.set(`Scene: ${p.scene_category}`, (map.get(`Scene: ${p.scene_category}`) || 0) + 1);
+      }
+    });
+    return Array.from(map.entries()).map(([name, count]) => ({ name, count }));
+  }, [photos]);
+
+  const [scope, setScope] = useState<'best' | 'all' | 'selected' | 'folder'>(bestCount > 0 ? 'best' : 'all');
+  const [selectedFolder, setSelectedFolder] = useState<string>('');
   const [previewMode, setPreviewMode] = useState<'split' | 'after' | 'before'>('split');
   const [fitMode, setFitMode] = useState<'contain' | 'scroll'>('contain');
 
@@ -72,12 +96,40 @@ export const AutoEditModal: React.FC<AutoEditModalProps> = ({
 
   const currentPresetInfo = WEDDING_PRESETS.find(p => p.id === selectedPreset) || WEDDING_PRESETS[0];
 
+  const effectiveFolder = selectedFolder || availableFolders[0]?.name || '';
+
+  const countToEdit = useMemo(() => {
+    if (scope === 'best') return bestCount;
+    if (scope === 'selected') return selectedCount;
+    if (scope === 'folder') {
+      return availableFolders.find(f => f.name === effectiveFolder)?.count || 0;
+    }
+    return totalCount;
+  }, [scope, bestCount, selectedCount, availableFolders, effectiveFolder, totalCount]);
+
   const handleStart = () => {
-    onStartAutoEdit(selectedPreset, scope);
+    let targetIds: number[] | undefined = undefined;
+    if (scope === 'best') {
+      targetIds = bestPhotos.map(p => p.id);
+    } else if (scope === 'selected') {
+      targetIds = selectedPhotoIds;
+    } else if (scope === 'folder') {
+      if (effectiveFolder.startsWith('Scene: ')) {
+        const sc = effectiveFolder.replace('Scene: ', '');
+        targetIds = photos.filter(p => p.scene_category === sc).map(p => p.id);
+      } else if (effectiveFolder.startsWith('Folder: ')) {
+        const sub = effectiveFolder.replace('Folder: ', '');
+        targetIds = photos.filter(p => {
+          const parts = (p.file_path || '').replace(/\\/g, '/').split('/');
+          return parts.length > 2 && parts[parts.length - 2] === sub;
+        }).map(p => p.id);
+      }
+    } else {
+      targetIds = undefined; // All photos
+    }
+    onStartAutoEdit(selectedPreset, targetIds);
     onClose();
   };
-
-  const countToEdit = scope === 'selected' && selectedCount > 0 ? selectedCount : totalCount;
   const sampleImgUrl = samplePhotoId ? api.getThumbnailUrl(samplePhotoId) : null;
 
   return (
@@ -494,42 +546,121 @@ export const AutoEditModal: React.FC<AutoEditModalProps> = ({
           alignItems: 'center',
           justifyContent: 'space-between'
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-            <span style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8' }}>Apply To:</span>
-            <div style={{ display: 'flex', gap: '6px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+            <span style={{ fontSize: '11px', fontWeight: 600, color: '#94a3b8' }}>Apply Auto Edit To:</span>
+            <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap', alignItems: 'center' }}>
+              <button
+                type="button"
+                onClick={() => setScope('best')}
+                disabled={bestCount === 0}
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: '6px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  cursor: bestCount > 0 ? 'pointer' : 'not-allowed',
+                  border: scope === 'best' ? '1px solid #10b981' : '1px solid #252b3a',
+                  background: scope === 'best' ? 'rgba(16, 185, 129, 0.18)' : '#151822',
+                  color: scope === 'best' ? '#34d399' : bestCount === 0 ? '#475569' : '#94a3b8',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+              >
+                <Star size={12} style={{ color: scope === 'best' ? '#34d399' : '#eab308' }} />
+                <span>AI Best ({bestCount})</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setScope('all')}
+                style={{
+                  padding: '4px 10px',
+                  borderRadius: '6px',
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  cursor: 'pointer',
+                  border: scope === 'all' ? '1px solid #10b981' : '1px solid #252b3a',
+                  background: scope === 'all' ? 'rgba(16, 185, 129, 0.18)' : '#151822',
+                  color: scope === 'all' ? '#34d399' : '#94a3b8',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px'
+                }}
+              >
+                <Camera size={12} />
+                <span>All Photos ({totalCount})</span>
+              </button>
+
               <button
                 type="button"
                 onClick={() => setScope('selected')}
                 disabled={selectedCount === 0}
                 style={{
-                  padding: '3px 10px',
-                  borderRadius: '5px',
+                  padding: '4px 10px',
+                  borderRadius: '6px',
                   fontSize: '11px',
                   fontWeight: 600,
                   cursor: selectedCount > 0 ? 'pointer' : 'not-allowed',
                   border: scope === 'selected' ? '1px solid #10b981' : '1px solid #252b3a',
-                  background: scope === 'selected' ? 'rgba(16, 185, 129, 0.15)' : '#151822',
-                  color: scope === 'selected' ? '#34d399' : selectedCount === 0 ? '#475569' : '#94a3b8'
+                  background: scope === 'selected' ? 'rgba(16, 185, 129, 0.18)' : '#151822',
+                  color: scope === 'selected' ? '#34d399' : selectedCount === 0 ? '#475569' : '#94a3b8',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '4px'
                 }}
               >
-                Selected Photos ({selectedCount})
+                <Check size={12} />
+                <span>Selected ({selectedCount})</span>
               </button>
-              <button
-                type="button"
-                onClick={() => setScope('all')}
-                style={{
-                  padding: '3px 10px',
-                  borderRadius: '5px',
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  cursor: 'pointer',
-                  border: scope === 'all' ? '1px solid #10b981' : '1px solid #252b3a',
-                  background: scope === 'all' ? 'rgba(16, 185, 129, 0.15)' : '#151822',
-                  color: scope === 'all' ? '#34d399' : '#94a3b8'
-                }}
-              >
-                All Project Photos ({totalCount})
-              </button>
+
+              {availableFolders.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <button
+                    type="button"
+                    onClick={() => setScope('folder')}
+                    style={{
+                      padding: '4px 10px',
+                      borderRadius: '6px',
+                      fontSize: '11px',
+                      fontWeight: 600,
+                      cursor: 'pointer',
+                      border: scope === 'folder' ? '1px solid #10b981' : '1px solid #252b3a',
+                      background: scope === 'folder' ? 'rgba(16, 185, 129, 0.18)' : '#151822',
+                      color: scope === 'folder' ? '#34d399' : '#94a3b8',
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '4px'
+                    }}
+                  >
+                    <Folder size={12} style={{ color: scope === 'folder' ? '#34d399' : '#38bdf8' }} />
+                    <span>Specific Folder / Scene</span>
+                  </button>
+                  {scope === 'folder' && (
+                    <select
+                      value={effectiveFolder}
+                      onChange={(e) => setSelectedFolder(e.target.value)}
+                      style={{
+                        padding: '4px 8px',
+                        background: '#151822',
+                        border: '1px solid #10b981',
+                        color: '#34d399',
+                        borderRadius: '6px',
+                        fontSize: '11px',
+                        fontWeight: 600,
+                        outline: 'none',
+                        cursor: 'pointer'
+                      }}
+                    >
+                      {availableFolders.map(f => (
+                        <option key={f.name} value={f.name}>
+                          {f.name} ({f.count} photos)
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              )}
             </div>
           </div>
 

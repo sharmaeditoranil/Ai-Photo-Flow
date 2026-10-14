@@ -412,8 +412,8 @@ def apply_edit_pipeline(
         h_mask = np.clip((lut - 128.0) / 127.0, 0.0, 1.0) ** 1.35
         lut += h_mask * (params.highlights * 0.42)
     if abs(params.whites) > 0.1:
-        w_mask = np.clip((lut - 180.0) / 75.0, 0.0, 1.0)
-        lut += w_mask * (params.whites * 0.24)
+        w_mask = np.clip((lut - 175.0) / 80.0, 0.0, 1.0)
+        lut += w_mask * (params.whites * 0.28)
     if abs(params.blacks) > 0.1:
         b_mask = np.clip((60.0 - lut) / 60.0, 0.0, 1.0)
         lut += b_mask * (params.blacks * 0.22)
@@ -424,6 +424,15 @@ def apply_edit_pipeline(
     lab = cv2.cvtColor(np.clip(img, 0, 255).astype(np.uint8), cv2.COLOR_RGB2LAB)
     L_u8 = cv2.LUT(lab[:, :, 0], np.clip(lut, 0.0, 255.0).astype(np.uint8))
     L = L_u8.astype(np.float32)
+
+    # Shadow Blue Cast Neutralizer: removes cold blue tint in darks/shadows, keeping deep suits & sherwanis rich and warm neutral
+    if not is_pure_light:
+        shadow_gate = np.clip((75.0 - L) / 50.0, 0.0, 1.0)
+        # In Lab space, B channel < 128 indicates blue tint. Nudge towards neutral 128 in shadows.
+        b_dev = 128.0 - lab[:, :, 2].astype(np.float32)
+        blue_excess = np.clip(b_dev, 0.0, 30.0)
+        if np.any(blue_excess > 0.5):
+            lab[:, :, 2] = np.clip(lab[:, :, 2].astype(np.float32) + blue_excess * shadow_gate * 0.45, 0.0, 255.0).astype(np.uint8)
 
     # E. Local Micro-Contrast (Clarity) via CLAHE: brings out intricate jewelry, bridal embroidery & silk sheen
     try:
@@ -494,7 +503,7 @@ def apply_edit_pipeline(
             hair_mask = hair_canvas * dark_hair_gate
 
             # Hair black anchor: pulls hair shadows into rich natural black without clipping specular highlights
-            hair_deepen = hair_mask * 0.075 * np.clip((78.0 - L) / 60.0, 0.0, 1.0)
+            hair_deepen = hair_mask * 0.10 * np.clip((78.0 - L) / 60.0, 0.0, 1.0)
             L = np.clip(L * (1.0 - hair_deepen), 0.0, 255.0)
             del hair_canvas, hair_mask, hair_deepen, dark_hair_gate
     except Exception:
@@ -678,15 +687,17 @@ def apply_edit_pipeline(
                 # Porcelain white brightness lift: +5.5 levels on skin midtones
                 skin_white_lift = 5.5 * skin_f * roll_off
 
-                # Clean tone: neutralize excessive yellow cast on skin highlights (-3.5% yellow excess)
+                # Clean tone: neutralize excessive yellow cast on skin highlights & midtones
+                # User requirement: "skin color me yellow halka sa kam karke blue add hoga... ekdam halka"
                 # Gives natural, fresh Indian wedding skin tone (not muddy or yellow-tinged)
                 yellow_excess = np.clip((img[:, :, 1] - img[:, :, 2]) / 255.0, 0.0, 1.0)
-                blue_fill = yellow_excess * 0.035 * skin_f * roll_off * 255.0
+                blue_fill = yellow_excess * 0.055 * skin_f * roll_off * 255.0
+                yellow_cut = yellow_excess * 0.025 * skin_f * roll_off * 255.0
 
                 img[:, :, 0] += skin_white_lift * 0.35
-                img[:, :, 1] += skin_white_lift * 0.35
-                img[:, :, 2] += skin_white_lift * 0.30 + blue_fill
-                del Y_skin, roll_off, skin_white_lift, yellow_excess, blue_fill
+                img[:, :, 1] += (skin_white_lift * 0.35) - yellow_cut
+                img[:, :, 2] += (skin_white_lift * 0.30) + blue_fill
+                del Y_skin, roll_off, skin_white_lift, yellow_excess, blue_fill, yellow_cut
                 np.clip(img, 0.0, 255.0, out=img)
         except Exception:
             pass
@@ -1059,7 +1070,7 @@ def _radial_falloff(img: np.ndarray, strength: float, subject_info: Optional[Dic
     np.clip(img, 0.0, 255.0, out=img)
 
 
-SKIN_LOCK_HUE_MAX = 45.0     # Lab hue above this reads yellow: never lock skin to yellow hues
+SKIN_LOCK_HUE_MAX = 42.0     # Lab hue above this reads yellow: never lock skin to yellow hues
 SKIN_LOCK_HUE_MIN = 34.0     # below this skin reads pink / magenta
 SKIN_LOCK_CHROMA = 1.04      # a touch richer than the camera, so skin looks healthy, not grey
 

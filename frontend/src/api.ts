@@ -256,6 +256,10 @@ export const api = {
     return `${API_BASE}/photos/${photoId}/original`;
   },
 
+  getOriginalPreviewUrl(photoId: number): string {
+    return `${API_BASE}/photos/${photoId}/original-preview`;
+  },
+
   async getRetouchPresets(): Promise<{ presets: RetouchPreset[]; defaults: RetouchParams }> {
     const res = await fetch(`${API_BASE}/retouch/presets`);
     if (!res.ok) throw new Error('Failed to load retouch presets');
@@ -412,7 +416,8 @@ export const api = {
     clientPin?: string,
     photoIds?: number[],
     watermarkEnabled = true,
-    watermarkText = 'PROOF ONLY - Ai PhotoFlow'
+    watermarkText = 'PROOF ONLY - Ai PhotoFlow',
+    autoDeleteDays = 60
   ): Promise<any> {
     const res = await fetch(`${API_BASE}/proofing/create`, {
       method: 'POST',
@@ -425,6 +430,7 @@ export const api = {
         photo_ids: photoIds,
         watermark_enabled: watermarkEnabled,
         watermark_text: watermarkText,
+        auto_delete_days: autoDeleteDays
       }),
     });
     if (!res.ok) {

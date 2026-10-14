@@ -17,6 +17,7 @@ import { PricingModal } from './components/PricingModal';
 import { LightboxModal } from './components/LightboxModal';
 import { ShareProofingModal } from './components/ShareProofingModal';
 import { BatchProgressModal } from './components/BatchProgressModal';
+import { AutoEditModal } from './components/AutoEditModal';
 
 
 export const App: React.FC = () => {
@@ -48,6 +49,7 @@ export const App: React.FC = () => {
 
   // Modals
   const [isImportOpen, setIsImportOpen] = useState<boolean>(false);
+  const [isAutoEditModalOpen, setIsAutoEditModalOpen] = useState<boolean>(false);
   const [isExportOpen, setIsExportOpen] = useState<boolean>(false);
   const [isShareProofingOpen, setIsShareProofingOpen] = useState<boolean>(false);
   const [isBatchProgressOpen, setIsBatchProgressOpen] = useState<boolean>(false);
@@ -296,11 +298,16 @@ export const App: React.FC = () => {
     }
   };
 
-  const handleStartAutoEdit = async () => {
+  const handleStartAutoEdit = () => {
+    if (!currentProject) return;
+    setIsAutoEditModalOpen(true);
+  };
+
+  const handleStartAutoEditWithTarget = async (presetName: string, targetPhotoIds?: number[]) => {
     if (!currentProject) return;
     try {
-      const targetIds = selectedPhotoIds.length > 0 ? selectedPhotoIds : undefined;
-      const { job_id } = await api.startAutoEdit(currentProject.id, selectedStylePreset, targetIds, autoEditRetouchPreset);
+      setSelectedStylePreset(presetName);
+      const { job_id } = await api.startAutoEdit(currentProject.id, presetName, targetPhotoIds, autoEditRetouchPreset);
       const job = await api.getJob(job_id);
       setActiveJob(job);
       setIsBatchProgressOpen(true);
@@ -638,6 +645,18 @@ export const App: React.FC = () => {
           if (currentProject) {
             loadProjectDetails(currentProject.id);
           }
+        }}
+      />
+
+      <AutoEditModal
+        isOpen={isAutoEditModalOpen}
+        onClose={() => setIsAutoEditModalOpen(false)}
+        photos={photos}
+        selectedPhotoIds={selectedPhotoIds}
+        samplePhotoId={selectedPhoto?.id || (photos.length > 0 ? photos[0].id : undefined)}
+        onStartAutoEdit={(presetName, targetIds) => {
+          setIsAutoEditModalOpen(false);
+          handleStartAutoEditWithTarget(presetName, targetIds);
         }}
       />
 

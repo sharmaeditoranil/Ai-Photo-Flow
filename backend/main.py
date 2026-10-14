@@ -9,6 +9,9 @@ import time
 import io
 import cv2
 import numpy as np
+import hashlib
+import threading
+from collections import OrderedDict
 from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException, Query, Body, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -35,6 +38,10 @@ from backend.services.hosting_sync_service import hosting_sync_service, normaliz
 from backend.services.blink_fix_service import find_eye_donors, swap_eyes, revert_eyes
 
 app = FastAPI(title="Ai PhotoFlow Core API", version="1.0.0")
+
+_preview_cache = OrderedDict()
+_PREVIEW_CACHE_MAX = 40
+_preview_cache_lock = threading.Lock()
 
 
 # Enable CORS for frontend desktop client
@@ -877,11 +884,42 @@ def get_photo_original(photo_id: int):
 
     return FileResponse(row["file_path"])
 
+@app.get("/api/photos/{photo_id}/original-preview")
+def get_photo_original_preview(photo_id: int):
+    """
+    Renders/serves a fast 2560px unedited base preview for instant Before/After comparison.
+    Cached on disk in CACHE_DIR/previews/orig_p{photo_id}.jpg so subsequent loads take 5-10ms.
+    """
+    cache_file = os.path.join(CACHE_DIR, "previews", f"orig_p{photo_id}.jpg")
+    if os.path.exists(cache_file) and os.path.getsize(cache_file) > 0:
+        return FileResponse(cache_file, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT file_path, project_id FROM photos WHERE id = ?", (photo_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row or not os.path.exists(row["file_path"]):
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    try:
+        base_rgb = load_image(row["file_path"], max_dim=2560)
+        success, buffer = cv2.imencode(".jpg", cv2.cvtColor(base_rgb, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 92])
+        if success:
+            with open(cache_file, "wb") as f:
+                f.write(buffer.tobytes())
+            return FileResponse(cache_file, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=86400"})
+    except Exception:
+        pass
+
+    thumb_path = generate_thumbnail(row["file_path"], row["project_id"], photo_id)
+    return FileResponse(thumb_path, media_type="image/jpeg")
+
 @app.get("/api/photos/{photo_id}/preview")
 def get_photo_preview(photo_id: int):
     """
     Renders high-speed non-destructive preview with current edit parameters applied.
-    Without an active licence only the grid-size image is served.
+    Cached in memory and on disk so opening or switching photos takes 2-10 milliseconds.
     """
     if not (license_service.verify_operational_permission("PREVIEW")[0] and pipeline_ready()):
         return get_photo_thumbnail(photo_id)
@@ -893,17 +931,51 @@ def get_photo_preview(photo_id: int):
     if not row:
         raise HTTPException(status_code=404, detail="Photo not found")
 
-    params_dict = json.loads(row["edit_params"]) if row["edit_params"] else {}
+    params_str = row["edit_params"] or "{}"
+    param_hash = hashlib.md5(params_str.encode()).hexdigest()[:12]
+    cache_key = f"{photo_id}_{param_hash}"
+    cache_file = os.path.join(CACHE_DIR, "previews", f"prev_{cache_key}.jpg")
+
+    with _preview_cache_lock:
+        if cache_key in _preview_cache:
+            _preview_cache.move_to_end(cache_key)
+            return Response(content=_preview_cache[cache_key], media_type="image/jpeg", headers={"Cache-Control": "public, max-age=3600"})
+
+    if os.path.exists(cache_file) and os.path.getsize(cache_file) > 0:
+        try:
+            with open(cache_file, "rb") as f:
+                data = f.read()
+            with _preview_cache_lock:
+                _preview_cache[cache_key] = data
+                while len(_preview_cache) > _PREVIEW_CACHE_MAX:
+                    _preview_cache.popitem(last=False)
+            return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=3600"})
+        except Exception:
+            pass
+
+    params_dict = json.loads(params_str)
     params = EditParameters.from_dict(params_dict)
 
     edited_rgb = render_preview(row["file_path"], params, max_dim=2560)
 
-    # Encode to JPEG in memory with high quality 95 for razor-sharp Retina clarity
-    success, buffer = cv2.imencode(".jpg", cv2.cvtColor(edited_rgb, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 95])
+    # Encode to JPEG with quality 92 for lightning-fast encoding and crisp Retina clarity
+    success, buffer = cv2.imencode(".jpg", cv2.cvtColor(edited_rgb, cv2.COLOR_RGB2BGR), [cv2.IMWRITE_JPEG_QUALITY, 92])
     if not success:
         raise HTTPException(status_code=500, detail="Failed to encode preview image")
 
-    return Response(content=buffer.tobytes(), media_type="image/jpeg")
+    data = buffer.tobytes()
+    try:
+        with open(cache_file, "wb") as f:
+            f.write(data)
+    except Exception:
+        pass
+
+    with _preview_cache_lock:
+        _preview_cache[cache_key] = data
+        while len(_preview_cache) > _PREVIEW_CACHE_MAX:
+            _preview_cache.popitem(last=False)
+
+    return Response(content=data, media_type="image/jpeg", headers={"Cache-Control": "public, max-age=3600"})
 
 
 # --- AI Skin Retouch ---
@@ -1155,6 +1227,7 @@ class CreateGalleryRequest(BaseModel):
     photo_ids: Optional[List[int]] = None
     watermark_enabled: bool = True
     watermark_text: str = "PROOF ONLY - Ai PhotoFlow"
+    auto_delete_days: int = 60
 
 class SelectPhotoRequest(BaseModel):
     photo_id: int
@@ -1180,7 +1253,8 @@ def create_client_gallery(req: CreateGalleryRequest):
             client_pin=req.client_pin or "",
             photo_ids=req.photo_ids,
             watermark_enabled=req.watermark_enabled,
-            watermark_text=req.watermark_text
+            watermark_text=req.watermark_text,
+            auto_delete_days=req.auto_delete_days
         )
         return res
     except Exception as e:

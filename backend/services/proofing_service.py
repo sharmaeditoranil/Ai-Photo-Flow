@@ -9,6 +9,7 @@ import uuid
 import json
 import time
 import threading
+from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from PIL import Image, ImageDraw, ImageFont
 
@@ -81,14 +82,21 @@ class ProofingService:
         client_pin: str = "",
         photo_ids: Optional[List[int]] = None,
         watermark_enabled: bool = True,
-        watermark_text: str = "PROOF ONLY - Ai PhotoFlow"
+        watermark_text: str = "PROOF ONLY - Ai PhotoFlow",
+        auto_delete_days: int = 60
     ) -> Dict[str, Any]:
         """
         Creates a client proofing gallery, generates download-protected 1200px previews,
-        and saves gallery records.
+        and saves gallery records with auto-expiration (default 60 days / 2 months).
         """
         conn = get_connection()
         cursor = conn.cursor()
+
+        # Clean any expired galleries on disk to free up storage
+        try:
+            self.purge_expired_galleries()
+        except Exception:
+            pass
 
         # Verify project
         cursor.execute("SELECT id, name, folder_path FROM projects WHERE id = ?", (project_id,))
@@ -124,17 +132,24 @@ class ProofingService:
         gallery_dir = os.path.join(PROOFING_CACHE_DIR, gallery_uuid)
         os.makedirs(gallery_dir, exist_ok=True)
 
+        # Calculate expiration timestamp (2 months / 60 days default)
+        expires_at = None
+        if auto_delete_days and auto_delete_days > 0:
+            expires_at = (datetime.now() + timedelta(days=auto_delete_days)).strftime("%Y-%m-%d %H:%M:%S")
+
         # Insert Gallery record immediately
         cursor.execute("SELECT folder_path FROM projects WHERE id = ?", (project_id,))
         _pr = cursor.fetchone()
         cursor.execute("""
         INSERT INTO client_galleries (
             project_id, gallery_uuid, title, client_name, client_pin,
-            total_photos, selected_count, status, watermark_enabled, watermark_text, folder_path
-        ) VALUES (?, ?, ?, ?, ?, ?, 0, 'ACTIVE', ?, ?, ?)
+            total_photos, selected_count, status, watermark_enabled, watermark_text, folder_path,
+            auto_delete_days, expires_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 0, 'ACTIVE', ?, ?, ?, ?, ?)
         """, (
             project_id, gallery_uuid, title, client_name, client_pin,
-            len(photos), 1 if watermark_enabled else 0, watermark_text, (_pr["folder_path"] if _pr else "")
+            len(photos), 1 if watermark_enabled else 0, watermark_text, (_pr["folder_path"] if _pr else ""),
+            auto_delete_days, expires_at
         ))
 
         # Insert photo mappings immediately (file name + album-server id kept for re-linking later)
@@ -705,6 +720,33 @@ class ProofingService:
             "total_photos": len(photos),
             "index_file": index_path
         }
+
+    def purge_expired_galleries(self) -> int:
+        """
+        Automatically purges client selection galleries where client did not select within auto_delete_days (default 60 days / 2 months).
+        Frees up local disk storage by deleting cached previews and db records.
+        """
+        conn = get_connection()
+        cursor = conn.cursor()
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        cursor.execute("""
+        SELECT gallery_uuid, id FROM client_galleries
+        WHERE status != 'SUBMITTED' AND expires_at IS NOT NULL AND expires_at < ?
+        """, (now_str,))
+        expired = cursor.fetchall()
+        purged = 0
+        for row in expired:
+            g_uuid = row["gallery_uuid"]
+            g_dir = os.path.join(PROOFING_CACHE_DIR, g_uuid)
+            if os.path.exists(g_dir):
+                shutil.rmtree(g_dir, ignore_errors=True)
+            cursor.execute("DELETE FROM client_gallery_photos WHERE gallery_uuid = ?", (g_uuid,))
+            cursor.execute("DELETE FROM client_galleries WHERE gallery_uuid = ?", (g_uuid,))
+            purged += 1
+        if purged > 0:
+            conn.commit()
+        conn.close()
+        return purged
 
 
 proofing_service = ProofingService()

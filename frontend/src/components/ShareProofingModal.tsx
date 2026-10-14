@@ -28,6 +28,7 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
   const [watermarkEnabled, setWatermarkEnabled] = useState(true);
   const [watermarkText, setWatermarkText] = useState('PROOF ONLY - Ai PhotoFlow');
   const [selectionScope, setSelectionScope] = useState<'best' | 'edited' | 'all'>('best');
+  const [autoDeleteDays, setAutoDeleteDays] = useState<number>(60);
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -243,7 +244,8 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
         clientPin.trim(),
         targetIds,
         watermarkEnabled,
-        watermarkText.trim()
+        watermarkText.trim(),
+        autoDeleteDays
       );
       setActiveGallery(res);
       if (res.job_id) {
@@ -770,6 +772,35 @@ export const ShareProofingModal: React.FC<ShareProofingModalProps> = ({
                   }}
                 />
               )}
+            </div>
+
+            {/* Auto-Delete / Storage Clean Option */}
+            <div style={{
+              background: '#161922', padding: '10px 12px', borderRadius: '8px',
+              border: '1px solid #232836', marginBottom: '12px'
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
+                <span style={{ fontSize: '12px', fontWeight: 600, color: '#f1f5f9', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <HardDrive size={13} style={{ color: '#38bdf8' }} />
+                  <span>Auto-Delete if Unused (Storage Cleaner)</span>
+                </span>
+                <select
+                  value={autoDeleteDays}
+                  onChange={e => setAutoDeleteDays(Number(e.target.value))}
+                  style={{
+                    background: '#0d0f14', border: '1px solid #38bdf8', color: '#38bdf8',
+                    padding: '3px 8px', borderRadius: '5px', fontSize: '11px', fontWeight: 600, outline: 'none', cursor: 'pointer'
+                  }}
+                >
+                  <option value={60}>2 Months (60 Days) - Recommended</option>
+                  <option value={30}>1 Month (30 Days)</option>
+                  <option value={90}>3 Months (90 Days)</option>
+                  <option value={0}>Never Delete (Keep Indefinitely)</option>
+                </select>
+              </div>
+              <p style={{ fontSize: '11px', color: '#64748b', margin: 0 }}>
+                Agar customer 2 month tak selection link ka use nahi karta hai, to link aur preview storage se automatically delete ho jayega taaki aapka PC/Mac storage clean aur free rahe.
+              </p>
             </div>
 
             <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '6px' }}>

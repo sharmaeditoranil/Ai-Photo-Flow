@@ -163,6 +163,8 @@ def init_db():
         "ALTER TABLE client_galleries ADD COLUMN hosting_status TEXT DEFAULT ''",
         "ALTER TABLE client_galleries ADD COLUMN hosting_error TEXT DEFAULT ''",
         "ALTER TABLE client_galleries ADD COLUMN hosting_uploaded INTEGER DEFAULT 0",
+        "ALTER TABLE client_galleries ADD COLUMN auto_delete_days INTEGER DEFAULT 60",
+        "ALTER TABLE client_galleries ADD COLUMN expires_at TIMESTAMP DEFAULT NULL",
     ):
         try:
             cursor.execute(col_sql)

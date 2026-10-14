@@ -54,7 +54,7 @@ export const BeforeAfterView: React.FC<BeforeAfterViewProps> = ({
     setSplitPos(pct);
   };
 
-  const origUrl = api.getOriginalUrl(photo.id);
+  const origUrl = api.getOriginalPreviewUrl(photo.id);
   const editedUrl = api.getPreviewUrl(photo.id, previewTimestamp);
   const maskColors: Record<Exclude<RetouchMaskKind, 'off'>, string> = {
     skin: 'rgba(34, 197, 94, 0.55)',

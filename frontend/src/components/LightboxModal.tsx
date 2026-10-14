@@ -49,6 +49,10 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
 
   const photo = photos[currentIndex];
 
+  useEffect(() => {
+    setImgLoaded(false);
+  }, [photo?.id]);
+
   const [isFixingEyes, setIsFixingEyes] = useState<boolean>(false);
 
   const handleFixEyesLightbox = async () => {
@@ -647,12 +651,32 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
             }}
           />
 
-          {compareActive && imgLoaded && (
+          {/* Instant Placeholder: Thumbnail shows in 10ms while 2560px preview loads */}
+          {!imgLoaded && (
+            <img
+              src={api.getThumbnailUrl(photo.id)}
+              alt=""
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: '100%',
+                objectFit: 'contain',
+                borderRadius: '6px',
+                filter: 'blur(2px)',
+                opacity: 0.85,
+                pointerEvents: 'none'
+              }}
+            />
+          )}
+
+          {compareActive && (
             <>
               <img
                 key={`${photo.id}_before`}
                 className="lb-before"
-                src={api.getOriginalUrl(photo.id)}
+                src={api.getOriginalPreviewUrl(photo.id)}
                 alt=""
                 draggable={false}
                 style={{ clipPath: `inset(0 ${100 - splitPos}% 0 0)` }}
@@ -665,7 +689,7 @@ export const LightboxModal: React.FC<LightboxModalProps> = ({
             </>
           )}
         </div>
-        {compareActive && imgLoaded && (
+        {compareActive && (
           <div className="lb-hint">Drag slider to compare · Drag photo to pan (Hand Tool) · Double-click to zoom · {'\\'} to toggle</div>
         )}
 
