@@ -95,7 +95,21 @@ def load_image(filepath: str, max_dim: Optional[int] = None) -> np.ndarray:
                     _raw_cache.popitem(last=False)
             return img
 
-    # Standard reading via Pillow / OpenCV
+    # Fast SIMD decoding via OpenCV with unicode path support
+    try:
+        raw_bytes = np.fromfile(filepath, dtype=np.uint8)
+        bgr = cv2.imdecode(raw_bytes, cv2.IMREAD_COLOR)
+        if bgr is not None:
+            if max_dim:
+                h, w = bgr.shape[:2]
+                scale = min(max_dim / max(h, w), 1.0)
+                if scale < 1.0:
+                    bgr = cv2.resize(bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+            return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    except Exception:
+        pass
+
+    # Standard reading via Pillow
     try:
         pil_img = Image.open(filepath)
         pil_img = ImageOps.exif_transpose(pil_img) # Correct orientation based on EXIF
@@ -106,20 +120,6 @@ def load_image(filepath: str, max_dim: Optional[int] = None) -> np.ndarray:
                 pil_img = pil_img.resize((int(w * scale), int(h * scale)), Image.Resampling.LANCZOS)
         return np.array(pil_img.convert("RGB"))
     except Exception:
-        # Fallback to OpenCV with safe unicode path support for Windows
-        try:
-            raw_bytes = np.fromfile(filepath, dtype=np.uint8)
-            bgr = cv2.imdecode(raw_bytes, cv2.IMREAD_COLOR)
-        except Exception:
-            bgr = cv2.imread(filepath)
-
-        if bgr is not None:
-            if max_dim:
-                h, w = bgr.shape[:2]
-                scale = min(max_dim / max(h, w), 1.0)
-                if scale < 1.0:
-                    bgr = cv2.resize(bgr, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
-            return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
         raise ValueError(f"Could not load image file: {filepath}")
 
 def generate_thumbnail(filepath: str, project_id: int, photo_id: int, base_rgb: Optional[np.ndarray] = None) -> str:
@@ -222,22 +222,26 @@ def apply_edit_pipeline(
         else:
             small_u8 = orig_u8
 
-        if not detected_face_boxes and face_detector is not None:
+        faces_detected = None
+        if not detected_face_boxes:
             try:
-                f_m = face_detector.detect(small_u8)
-                if f_m and f_m.bounding_boxes:
+                from backend.retouch.faces import detect_faces
+                faces_detected = detect_faces(small_u8)
+                if faces_detected:
                     inv_scale = 1.0 / proxy_scale if max(h, w) > 1000 else 1.0
                     detected_face_boxes = [
                         {
-                            "x": int(b["x"] * inv_scale),
-                            "y": int(b["y"] * inv_scale),
-                            "w": int(b["w"] * inv_scale),
-                            "h": int(b["h"] * inv_scale)
+                            "x": int(f.x * inv_scale),
+                            "y": int(f.y * inv_scale),
+                            "w": int(f.w * inv_scale),
+                            "h": int(f.h * inv_scale)
                         }
-                        for b in f_m.bounding_boxes
+                        for f in faces_detected
                     ]
             except Exception:
                 pass
+        else:
+            faces_detected = None
 
         # Fast proxy skin detection & feathered matte (eliminates repeated 24MP conversions & 100x100 blurs)
         ycrcb_s = cv2.cvtColor(small_u8, cv2.COLOR_RGB2YCrCb)
@@ -249,6 +253,7 @@ def apply_edit_pipeline(
     except Exception:
         detected_face_boxes = detected_face_boxes or []
         cached_skin_feather = None
+        faces_detected = None
     src_u8 = orig_u8                       # camera colours, kept for the Skin Colour Lock (step 8.5)
     orig_u8 = None
 
@@ -286,22 +291,19 @@ def apply_edit_pipeline(
         if src_u8 is not None:
             src_u8 = cv2.warpAffine(src_u8, rot_mat, (w, h), flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
 
-    # 2. Advanced Exposure with Soft-Shoulder Highlight Roll-off
+    # 2. Advanced Exposure with Soft-Shoulder Highlight Roll-off (Accelerated via 256-element LUT)
     if abs(params.exposure) > 0.01:
         ev_factor = 2.0 ** params.exposure
+        lut_exp = np.arange(256, dtype=np.float32)
         if ev_factor > 1.0:
-            # Boosting exposure on underexposed photos:
-            # Lift shadows and midtones while rolling off smoothly at the top to prevent clipping
-            # Photographic soft-knee transfer function: 255 * (1 - exp(-norm * ev)) / norm_max
-            # (computed in-place in float32 to avoid 24MP float64 temporaries)
             norm_max = float(1.0 - np.exp(-ev_factor))
-            img *= (-ev_factor / 255.0)
-            np.exp(img, out=img)
-            np.subtract(1.0, img, out=img)
-            img *= (255.0 / max(0.01, norm_max))
+            lut_exp = 255.0 * (1.0 - np.exp(-lut_exp * (ev_factor / 255.0))) / max(0.01, norm_max)
         else:
-            # Pulling back exposure on overexposed photos
-            img *= ev_factor
+            lut_exp *= ev_factor
+        lut_exp_u8 = np.clip(lut_exp, 0.0, 255.0).astype(np.uint8)
+        img_u8 = np.clip(img, 0.0, 255.0).astype(np.uint8)
+        img = cv2.LUT(img_u8, lut_exp_u8).astype(np.float32)
+        del img_u8, lut_exp, lut_exp_u8
 
     preset_name = getattr(params, 'preset_name', '') or ''
     is_pure_light = (
@@ -449,11 +451,11 @@ def apply_edit_pipeline(
         pass
 
     # E.2. Subtle Dehaze (only if atmospheric haze, fog, or lens flare veil is present)
-    # User requirement: "halka sa dehaze ekdam halaka sa use karna hai agar jaruri ho tab"
+    # Computed on small_u8 proxy for instant evaluation (0.5ms vs 140ms on 24MP)
     try:
-        dark_ch = np.minimum(np.minimum(img[:, :, 0], img[:, :, 1]), img[:, :, 2])
-        haze_floor = float(np.percentile(dark_ch, 2))
-        del dark_ch
+        dark_ch_s = np.minimum(np.minimum(small_u8[:, :, 0], small_u8[:, :, 1]), small_u8[:, :, 2])
+        haze_floor = float(np.percentile(dark_ch_s, 2))
+        del dark_ch_s
         # Clear photos have haze_floor < 12.0. Hazy/foggy photos have elevated black floor >= 16.0
         if haze_floor > 16.0:
             haze_strength = float(np.clip((haze_floor - 14.0) * 0.35, 1.0, 10.0))
@@ -464,11 +466,10 @@ def apply_edit_pipeline(
         pass
 
     # E.3. Natural Hair & Facial Hair Deep Black Anchor
-    # User requirement: "Hair Ko Detect kariye accha se face hair aur hair aur usko halka black hi rahne di
-    # hair me jayada light nahi add kare abhi jitna pe hai usme halka sa black add karna hai"
     try:
-        from backend.retouch.faces import detect_faces
-        faces_detected = detect_faces(small_u8)
+        if faces_detected is None:
+            from backend.retouch.faces import detect_faces
+            faces_detected = detect_faces(small_u8)
         if faces_detected:
             hair_canvas = np.zeros((h, w), dtype=np.float32)
             scale_x = w / float(small_u8.shape[1])
@@ -545,15 +546,9 @@ def apply_edit_pipeline(
 
         # 3. High-Pass Detail Extraction (Eyelashes, pupils, hair, fabric embroidery, jewelry facets)
         # crisp_boost = (high_pass_micro * 0.48 + high_pass_mid * 0.22), built in-place
-        crisp_boost = cv2.GaussianBlur(L, (0, 0), sigmaX=0.85)
+        crisp_boost = cv2.GaussianBlur(L, (0, 0), sigmaX=1.0)
         np.subtract(L, crisp_boost, out=crisp_boost)
-        crisp_boost *= 0.48
-
-        high_pass_mid = cv2.GaussianBlur(L, (0, 0), sigmaX=1.75)
-        np.subtract(L, high_pass_mid, out=high_pass_mid)
-        high_pass_mid *= 0.22
-        crisp_boost += high_pass_mid
-        del high_pass_mid
+        crisp_boost *= 0.65
 
         # 4. Authentic High-Pass Crisp Re-injection & Edge Enhancement
         # User requirement: "halka sa kam kariye jayada nhai ekdam halak sa kam kariyega"

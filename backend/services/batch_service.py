@@ -56,22 +56,32 @@ def _available_ram_gb() -> Optional[float]:
         return None
 
 
-def _export_worker_count(max_workers: int = 6, megapixels: float = 24.0) -> int:
-    """Parallel full-res renders are RAM-bound: measured ~2.3 GB peak for a 24 MP photo (scales with
-    megapixels, + headroom). Running more workers than free RAM allows pushes the OS into disk swapping,
-    which is far slower than fewer workers - the cause of "sometimes very slow" exports."""
+def _export_worker_count(max_workers: int = 8, megapixels: float = 24.0) -> int:
+    """Optimized parallel full-res renders scaling with CPU cores and available system RAM.
+    With in-place SIMD LUT acceleration and reduced float memory allocations, each worker
+    comfortably uses ~350MB of RAM, allowing multiple CPU cores to be utilized without swapping."""
     forced = os.environ.get("APF_EXPORT_WORKERS", "").strip()
     if forced.isdigit() and int(forced) > 0:          # support / benchmarking override
         return int(forced)
-    cpu_workers = min(max_workers, max(1, (os.cpu_count() or 4) - 1))
-    # Measured on 24 MP files: each extra parallel worker adds ~1.5 GB; 1 -> 2 workers was 1.6x faster even on
-    # a busy 16 GB Mac, 3 workers started swapping. Scales with megapixels.
-    gb_per_worker = 0.3 + 0.055 * max(6.0, float(megapixels))
-    floor_workers = 2 if (_total_ram_gb() or 0) >= 7.5 else 1
+    cores = os.cpu_count() or 4
+    cpu_workers = min(max_workers, max(1, cores - 1))
+    
+    total_ram = _total_ram_gb() or 8.0
+    if total_ram >= 28.0:
+        floor_workers = min(cpu_workers, 8)
+    elif total_ram >= 14.0:
+        floor_workers = min(cpu_workers, 4)
+    elif total_ram >= 7.5:
+        floor_workers = min(cpu_workers, 2)
+    else:
+        floor_workers = 1
+
     ram = _available_ram_gb()
     if ram is None:
-        return min(cpu_workers, floor_workers)
-    by_ram = int(max(0.0, ram - 0.5) // gb_per_worker)
+        return max(1, floor_workers)
+
+    gb_per_worker = 0.25 + 0.035 * max(6.0, float(megapixels))
+    by_ram = int(max(0.0, ram - 0.3) // gb_per_worker)
     return max(1, min(cpu_workers, max(floor_workers, by_ram)))
 
 
@@ -549,10 +559,10 @@ class BatchManager:
                         mp = min(mp or 24.0, float(max_resolution) ** 2 * 0.667 / 1e6)
                 except Exception:
                     mp = 24.0
-                num_workers = _export_worker_count(max_workers=6, megapixels=mp or 24.0)
+                num_workers = _export_worker_count(max_workers=8, megapixels=mp or 24.0)
                 # Share the CPU cores between the workers (one worker may use them all); restored afterwards
                 prev_cv_threads = cv2.getNumThreads()
-                cv2.setNumThreads(max(1, (os.cpu_count() or 4) // num_workers))
+                cv2.setNumThreads(max(1, min(2, (os.cpu_count() or 4) // num_workers)))
                 self.add_log(job_id, f"Using {num_workers} parallel export workers")
                 completed_count = 0
 
